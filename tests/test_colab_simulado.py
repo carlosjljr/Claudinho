@@ -104,6 +104,29 @@ try:
         rel = os.path.relpath(raiz, P.PASTA_RESULTADOS)
         if arqs: print(f"  {rel}: {len(arqs)} arquivos")
 
+    print("\n=== DETECCAO DE CADENCIA E FAIXA DE ACOMODACAO ===")
+    # A cadencia sai dos proprios dados, sem supor PERIODO_DEGRAU_S.
+    erros_cadencia = []
+    for e in res["ensaios"]:
+        inst = P.instantes_dos_degraus(e["tau"], e["theta_rel"], e["passo"])
+        if inst.size >= 2:
+            erros_cadencia.append(abs(np.median(np.diff(inst)) - P.PERIODO_DEGRAU_S))
+    check(len(erros_cadencia) == len(res["ensaios"]),
+          f"cadencia detectada em {len(erros_cadencia)}/{len(res['ensaios'])} ensaios")
+    check(max(erros_cadencia) < 0.06,
+          f"cadencia medida bate com 1,0 s (erro max {max(erros_cadencia):.3f} s)")
+
+    check(P.instantes_dos_degraus(np.arange(0, 3, 1/30), np.zeros(90), 10.0).size == 0,
+          "serie sem movimento devolve vazio em vez de levantar excecao")
+
+    P.BANDA_MODO = "passo"
+    faixa_passo = P.largura_da_faixa(10.0, 100.0)
+    P.BANDA_MODO = "valor_final"
+    faixa_final = P.largura_da_faixa(10.0, 100.0)
+    P.BANDA_MODO = "passo"
+    check(faixa_passo == 0.5 and faixa_final == 5.0,
+          f"modos de faixa: passo=±{faixa_passo}deg, valor_final=±{faixa_final}deg")
+
     # 2a execucao usando cache
     CHAMADAS.update({"open":0,"worksheets":0,"batch":0})
     P.executar(cliente=None)

@@ -48,10 +48,19 @@ PASTA_CACHE = os.path.join(PASTA_DRIVE, "CACHE_DADOS")
 USAR_CACHE = True          # 2a execucao nao chama a API do Sheets
 
 # --- Modelo do ensaio ------------------------------------------------
-PERIODO_DEGRAU_S = 1.0     # um degrau a cada 1 s
+PERIODO_DEGRAU_S = 1.0     # um degrau a cada 1 s (verificado nos dados)
 ANGULO_MAX_GRAUS = 180.0   # saturacao do servo
-BANDA_ACOMODACAO = 0.05    # +-5% do passo, para o tempo de acomodacao
 FRACAO_JANELA_REGIME = 0.30
+
+# Faixa de acomodacao. Dois modos:
+#   "passo"        -> +-BANDA * amplitude do degrau (convencao de controle)
+#   "valor_final"  -> +-BANDA * |valor final absoluto|
+# O 2o modo alarga a faixa conforme o braco sobe (a 180 graus, 2% sao
+# +-3,6 graus), o que encurta artificialmente o tempo de acomodacao nos
+# degraus altos. Use "passo" para o artigo; "valor_final" so para
+# comparar com resultados calculados na outra convencao.
+BANDA_MODO = "passo"
+BANDA_ACOMODACAO = 0.05
 
 # --- Deteccao do inicio do movimento ---------------------------------
 FRACAO_TOLERANCIA_PLATO = 0.15
@@ -456,6 +465,108 @@ def trajetoria_desejada(tau, passo):
     return comando
 
 
+JANELAS_CANDIDATAS = (0.10, 0.15, 0.20, 0.27, 0.35, 0.50)
+
+
+def instantes_dos_degraus(tau, theta_rel, passo, fracao=0.5, janela_s=None):
+    """Instantes dos degraus, escolhendo sozinho a melhor janela.
+
+    A janela precisa cobrir a subida mas ficar bem abaixo da cadencia --
+    e a cadencia e justamente o que se quer descobrir. Entao testam-se
+    varias janelas e fica a que produz o espacamento mais regular
+    (menor dispersao relativa), que e o que uma deteccao correta gera.
+    """
+    if janela_s is not None:
+        return _instantes_com_janela(tau, theta_rel, passo, fracao, janela_s)
+
+    melhor, melhor_score = np.empty(0), np.inf
+    for candidata in JANELAS_CANDIDATAS:
+        instantes = _instantes_com_janela(tau, theta_rel, passo, fracao, candidata)
+        if instantes.size < 3:
+            continue
+        espacos = np.diff(instantes)
+        media = float(np.mean(espacos))
+        if media <= 0:
+            continue
+        score = float(np.std(espacos) / media)
+        if score < melhor_score:
+            melhor, melhor_score = instantes, score
+    return melhor
+
+
+def _instantes_com_janela(tau, theta_rel, passo, fracao, janela_s):
+    """Instantes dos degraus tirados dos PROPRIOS dados.
+
+    Nao depende de supor a cadencia. Compara theta[i+w] com theta[i]
+    numa janela w que cobre a subida, em vez de quadros vizinhos: a
+    30 fps o servo leva 3 a 4 quadros para vencer um degrau de 10 graus,
+    entao a variacao POR QUADRO fica em ~3 graus e nunca ultrapassaria
+    metade do passo. Dentro de cada grupo toma-se o quadro mais ingreme.
+
+    O instante devolvido tem um deslocamento constante de meia subida;
+    como so as DIFERENCAS entre eles sao usadas (a cadencia), isso se
+    cancela.
+    """
+    if theta_rel.size < 4 or tau.size < 4:
+        return np.empty(0)
+    dt = float(np.median(np.diff(tau)))
+    if not np.isfinite(dt) or dt <= 0:
+        return np.empty(0)
+    janela = max(1, int(round(janela_s / dt)))
+    if theta_rel.size <= janela + 1:
+        return np.empty(0)
+
+    variacao = np.abs(theta_rel[janela:] - theta_rel[:-janela])
+    indices = np.flatnonzero(variacao > fracao * abs(passo))
+    if indices.size == 0:
+        return np.empty(0)
+
+    # Separar grupos exige um intervalo MENOR que a janela: com cadencia
+    # curta o vao entre duas subidas fica abaixo de `janela` e os degraus
+    # se fundiriam num grupo so. Dentro de um mesmo degrau a variacao
+    # fica continuamente acima do limiar (50% do passo), entao um limite
+    # pequeno nao parte um degrau em dois.
+    separacao = max(2, janela // 2)
+    cortes = np.flatnonzero(np.diff(indices) > separacao) + 1
+    derivada = np.abs(np.diff(theta_rel))
+    instantes = []
+    for grupo in np.split(indices, cortes):
+        if not grupo.size:
+            continue
+        inicio = int(grupo[0])
+        fim = min(int(grupo[-1]) + janela, derivada.size)
+        if fim <= inicio:
+            continue
+        instantes.append(tau[inicio + int(np.argmax(derivada[inicio:fim]))])
+    return np.asarray(instantes)
+
+
+def verificar_cadencia(grupo):
+    """Compara a cadencia medida com PERIODO_DEGRAU_S."""
+    periodos = []
+    for ensaio in grupo:
+        instantes = instantes_dos_degraus(
+            ensaio["tau"], ensaio["theta_rel"], ensaio["passo"])
+        if instantes.size >= 3:
+            periodos.extend(np.diff(instantes).tolist())
+    if len(periodos) < 2:
+        return None
+    medido = float(np.median(periodos))
+    if abs(medido - PERIODO_DEGRAU_S) > 0.10:
+        ref = grupo[0]
+        print(f"  ! {ref['prototipo']}/{ref['categoria']}: cadência medida nos "
+              f"dados = {medido:.3f} s, mas PERIODO_DEGRAU_S = "
+              f"{PERIODO_DEGRAU_S:.3f} s. Ajuste a constante — a curva "
+              f"desejada e todas as métricas dependem dela.")
+    return medido
+
+
+def largura_da_faixa(passo, alvo):
+    """Meia-largura da faixa de acomodacao, conforme BANDA_MODO."""
+    referencia = abs(passo) if BANDA_MODO == "passo" else abs(alvo)
+    return BANDA_ACOMODACAO * referencia
+
+
 def curva_desejada_xy(ensaio):
     """Curva desejada NO MESMO referencial dos dados medidos.
 
@@ -512,7 +623,7 @@ def metricas_por_degrau(ensaio):
         # TEMPO DE ACOMODACAO: instante em que a resposta ENTRA na faixa
         # de +-5% do passo e nao sai mais ate o proximo degrau.
         # NaN = o degrau acabou sem acomodar.
-        banda = BANDA_ACOMODACAO * passo
+        banda = largura_da_faixa(passo, alvo)
         fora = np.flatnonzero(np.abs(resp_j - alvo) > banda)
         if fora.size == 0:
             t_acomodacao = 0.0
@@ -521,6 +632,7 @@ def metricas_por_degrau(ensaio):
         else:
             t_acomodacao = np.nan
 
+        pico = float(np.max(resp_j))
         linhas.append({
             "prototipo": ensaio["prototipo"],
             "categoria": ensaio["categoria"],
@@ -529,9 +641,11 @@ def metricas_por_degrau(ensaio):
             "alvo_graus": alvo,
             "regime_graus": valor_regime,
             "erro_graus": valor_regime - alvo,
-            "sobressinal_pct": 100.0 * (float(np.max(resp_j)) - alvo) / passo,
+            "sobressinal_graus": pico - alvo,
+            "sobressinal_pct": 100.0 * (pico - alvo) / passo,
             "tempo_subida_s": t90 - t10 if np.isfinite(t10) and np.isfinite(t90) else np.nan,
             "tempo_acomodacao_s": t_acomodacao,
+            "faixa_acomodacao_graus": banda,
         })
     return pd.DataFrame(linhas)
 
@@ -615,7 +729,9 @@ def texto_acomodacao(grupo, por_degrau):
     if medias:
         linhas.append(f"Média:  {1000*np.mean(medias):5.0f} ms"
                       f" ± {1000*np.std(medias):3.0f}")
-    return "Tempo de acomodação (±5% do passo)\n" + "\n".join(linhas)
+    referencia = "do passo" if BANDA_MODO == "passo" else "do valor final"
+    return (f"Tempo de acomodação (±{100*BANDA_ACOMODACAO:.0f}% {referencia})\n"
+            + "\n".join(linhas))
 
 
 def plot_xy(grupo, por_degrau):
@@ -660,17 +776,18 @@ def plot_angulo(grupo, por_degrau, zoom=None):
     eixo.plot(tau_cmd, trajetoria_desejada(tau_cmd, ref["passo"]),
               "k--", linewidth=1.8, label="Comando (desejado)")
 
-    # faixa de +-5% usada para medir o tempo de acomodacao
+    # faixa usada para medir o tempo de acomodacao
     passo = abs(ref["passo"])
+    rotulo_faixa = f"Faixa de ±{100*BANDA_ACOMODACAO:.0f}% ({BANDA_MODO})"
     for k in range(int(np.ceil(limite / PERIODO_DEGRAU_S))):
         alvo = (k + 1) * passo
         if alvo > ANGULO_MAX_GRAUS:
             break
+        banda = largura_da_faixa(passo, alvo)
         eixo.fill_between([k * PERIODO_DEGRAU_S, min((k + 1) * PERIODO_DEGRAU_S, limite)],
-                          alvo - BANDA_ACOMODACAO * passo,
-                          alvo + BANDA_ACOMODACAO * passo,
+                          alvo - banda, alvo + banda,
                           color="0.6", alpha=0.25, linewidth=0,
-                          label="Faixa de ±5%" if k == 0 else None)
+                          label=rotulo_faixa if k == 0 else None)
 
     juntos = np.concatenate(medidos) if medidos else np.empty(0)
     if juntos.size:
@@ -743,7 +860,8 @@ def plot_acomodacao(grupo, por_degrau):
                      label=f"Média: {1000*media:.0f} ms")
     eixo.set_xlabel("Degrau")
     eixo.set_ylabel("Tempo de acomodação (ms)")
-    eixo.set_title(f"{ref['prototipo']} — {ref['categoria']} (±5% do passo)")
+    eixo.set_title(f"{ref['prototipo']} — {ref['categoria']} "
+                   f"(±{100*BANDA_ACOMODACAO:.0f}% {BANDA_MODO})")
     eixo.legend(loc="best")
     fig.tight_layout()
     salvar(fig, "TEMPO_ACOMODACAO", f"acomodacao_{ref['prototipo']}_{ref['categoria']}")
@@ -802,7 +920,7 @@ def executar(cliente=None):
     # acomodacao NAO e mensuravel e nao deve ir para o artigo.
     avisados = set()
     for ensaio in ensaios:
-        banda = BANDA_ACOMODACAO * abs(ensaio["passo"])
+        banda = largura_da_faixa(abs(ensaio["passo"]), abs(ensaio["passo"]))
         chave = (ensaio["prototipo"], ensaio["categoria"])
         if chave not in avisados and ensaio["resolucao_angular_max"] > banda:
             avisados.add(chave)
@@ -831,6 +949,7 @@ def executar(cliente=None):
     for chave in sorted(grupos):
         grupo = sorted(grupos[chave], key=lambda e: e["repeticao"])
         print(f"  {chave[0]} / {chave[1]}")
+        verificar_cadencia(grupo)
         plot_xy(grupo, por_degrau)
         plot_angulo(grupo, por_degrau)
         plot_angulo(grupo, por_degrau, zoom=ZOOM_SEGUNDOS)
