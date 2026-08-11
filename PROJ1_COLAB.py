@@ -698,7 +698,7 @@ def grade_comum(grupo):
 # ---------------------------------------------------------------------
 # PARTE 6 - GRAFICOS
 # ---------------------------------------------------------------------
-def salvar(fig, subpasta, nome):
+def salvar_figura_traj(fig, subpasta, nome):
     pasta = os.path.join(PASTA_RESULTADOS, subpasta)
     os.makedirs(pasta, exist_ok=True)
     for formato in FORMATOS:
@@ -756,7 +756,7 @@ def plot_xy(grupo, por_degrau):
     eixo.legend(loc="upper right")
     eixo.set_aspect("equal", adjustable="datalim")
     fig.tight_layout()
-    salvar(fig, "TRAJETORIA_XY", f"xy_{ref['prototipo']}_{ref['categoria']}")
+    salvar_figura_traj(fig, "TRAJETORIA_XY", f"xy_{ref['prototipo']}_{ref['categoria']}")
 
 
 def plot_angulo(grupo, por_degrau, zoom=None):
@@ -806,7 +806,7 @@ def plot_angulo(grupo, por_degrau, zoom=None):
     eixo.legend(loc="upper left")
     fig.tight_layout()
     nome = ("angulo_zoom_" if zoom else "angulo_") + f"{ref['prototipo']}_{ref['categoria']}"
-    salvar(fig, "ANGULO_ZOOM" if zoom else "ANGULO_TEMPO", nome)
+    salvar_figura_traj(fig, "ANGULO_ZOOM" if zoom else "ANGULO_TEMPO", nome)
 
 
 def plot_media(grupo, por_degrau):
@@ -835,7 +835,7 @@ def plot_media(grupo, por_degrau):
     inf.set_xlabel("Tempo desde o comando (s)")
     inf.set_ylabel("Erro (graus)")
     fig.tight_layout()
-    salvar(fig, "MEDIA_DESVIO", f"media_{ref['prototipo']}_{ref['categoria']}")
+    salvar_figura_traj(fig, "MEDIA_DESVIO", f"media_{ref['prototipo']}_{ref['categoria']}")
 
 
 def plot_acomodacao(grupo, por_degrau):
@@ -864,7 +864,7 @@ def plot_acomodacao(grupo, por_degrau):
                    f"(±{100*BANDA_ACOMODACAO:.0f}% {BANDA_MODO})")
     eixo.legend(loc="best")
     fig.tight_layout()
-    salvar(fig, "TEMPO_ACOMODACAO", f"acomodacao_{ref['prototipo']}_{ref['categoria']}")
+    salvar_figura_traj(fig, "TEMPO_ACOMODACAO", f"acomodacao_{ref['prototipo']}_{ref['categoria']}")
 
 
 def plot_comparacao_prototipos(resumo):
@@ -891,13 +891,13 @@ def plot_comparacao_prototipos(resumo):
     eixo.set_title("Comparação entre protótipos (±5% do passo)")
     eixo.legend(loc="best")
     fig.tight_layout()
-    salvar(fig, "TEMPO_ACOMODACAO", "comparacao_prototipos_acomodacao")
+    salvar_figura_traj(fig, "TEMPO_ACOMODACAO", "comparacao_prototipos_acomodacao")
 
 
 # ---------------------------------------------------------------------
 # PARTE 7 - EXECUCAO
 # ---------------------------------------------------------------------
-def executar(cliente=None):
+def executar_trajetoria(cliente=None):
     if cliente is None and EM_COLAB:
         cliente = autenticar()
 
@@ -982,4 +982,4 @@ def executar(cliente=None):
 
 
 if EM_COLAB:
-    RESULTADOS = executar()
+    RESULTADOS_TRAJETORIA = executar_trajetoria()

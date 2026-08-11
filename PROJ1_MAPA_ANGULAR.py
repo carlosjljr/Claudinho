@@ -58,7 +58,7 @@ plt.rcParams.update({
 })
 
 
-def garantir_drive():
+def garantir_drive_mapa():
     """Monta o Drive se estiver no Colab e ainda nao estiver montado.
 
     Assim a ordem das celulas nao importa: este modulo pode rodar antes
@@ -163,7 +163,7 @@ def resumir(tabela):
             .reset_index())
 
 
-def salvar(fig, nome):
+def salvar_figura_mapa(fig, nome):
     os.makedirs(PASTA_SAIDA, exist_ok=True)
     for formato in FORMATOS:
         fig.savefig(os.path.join(PASTA_SAIDA, f"{nome}.{formato}"), format=formato)
@@ -199,7 +199,7 @@ def figura_erro_angular(tabela, repet):
     dir_.legend(loc="best")
 
     fig.tight_layout()
-    salvar(fig, "mapa_angular_erro")
+    salvar_figura_mapa(fig, "mapa_angular_erro")
 
 
 def figura_espaco_trabalho(tabela):
@@ -224,7 +224,7 @@ def figura_espaco_trabalho(tabela):
         eixo.set_title(f"{nome} — malha 5×5")
         eixo.legend(loc="best")
     fig.tight_layout()
-    salvar(fig, "mapa_angular_espaco_trabalho")
+    salvar_figura_mapa(fig, "mapa_angular_espaco_trabalho")
 
 
 def conferir_comprimentos():
@@ -253,8 +253,8 @@ def conferir_comprimentos():
           "afetados pela escala).")
 
 
-def executar():
-    garantir_drive()
+def executar_mapa_angular():
+    garantir_drive_mapa()
     tabelas = [analisar(nome, dados) for nome, dados in PROTOTIPOS.items()]
     tabela = pd.concat(tabelas, ignore_index=True)
     repet = repetibilidade(tabela)
@@ -297,4 +297,4 @@ def executar():
 
 
 if __name__ == "__main__":
-    RESULTADOS_MAPA = executar()
+    RESULTADOS_MAPA = executar_mapa_angular()

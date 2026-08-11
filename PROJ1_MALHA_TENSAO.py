@@ -68,7 +68,7 @@ plt.rcParams.update({
 })
 
 
-def garantir_drive():
+def garantir_drive_malha():
     """Monta o Drive se estiver no Colab e ainda nao estiver montado.
 
     Assim a ordem das celulas nao importa: este modulo pode rodar antes
@@ -111,7 +111,7 @@ def tabela_convergencia():
     return pd.DataFrame(linhas)
 
 
-def salvar(fig, nome):
+def salvar_figura_malha(fig, nome):
     os.makedirs(PASTA_SAIDA, exist_ok=True)
     for formato in FORMATOS:
         fig.savefig(os.path.join(PASTA_SAIDA, f"{nome}.{formato}"), format=formato)
@@ -120,7 +120,7 @@ def salvar(fig, nome):
     plt.close(fig)
 
 
-def figura():
+def figura_malha():
     fig, eixos = plt.subplots(1, len(MODELOS), figsize=(11.0, 4.4), sharey=True)
     eixos = np.atleast_1d(eixos)
 
@@ -162,7 +162,7 @@ def figura():
     fig.legend(handles=marcadores, loc="lower center", ncol=4, frameon=False,
                bbox_to_anchor=(0.5, -0.14))
     fig.tight_layout()
-    salvar(fig, "malha_tensao_von_mises")
+    salvar_figura_malha(fig, "malha_tensao_von_mises")
 
 
 def figura_convergencia(convergencia):
@@ -188,11 +188,11 @@ def figura_convergencia(convergencia):
     eixos[0].set_ylabel("Variação da tensão (%)")
     eixos[-1].legend(loc="best", ncol=2)
     fig.tight_layout()
-    salvar(fig, "malha_convergencia")
+    salvar_figura_malha(fig, "malha_convergencia")
 
 
-def executar():
-    garantir_drive()
+def executar_malha():
+    garantir_drive_malha()
     convergencia = tabela_convergencia()
 
     print("=== CONVERGENCIA DE MALHA (com gravidade) ===")
@@ -216,7 +216,7 @@ def executar():
               "\n  a uma distância definida do canto, ou adicionar o raio de"
               "\n  concordância real da peça ao modelo.")
 
-    figura()
+    figura_malha()
     figura_convergencia(convergencia)
 
     os.makedirs(PASTA_SAIDA, exist_ok=True)
@@ -227,4 +227,4 @@ def executar():
 
 
 if __name__ == "__main__":
-    CONVERGENCIA = executar()
+    CONVERGENCIA = executar_malha()

@@ -71,7 +71,7 @@ class Cliente:
 
 
 try:
-    res = P.executar(cliente=Cliente())
+    res = P.executar_trajetoria(cliente=Cliente())
 
     print("\n=== VERIFICACOES ===")
     falhas = []
@@ -129,7 +129,7 @@ try:
 
     # 2a execucao usando cache
     CHAMADAS.update({"open":0,"worksheets":0,"batch":0})
-    P.executar(cliente=None)
+    P.executar_trajetoria(cliente=None)
     check(sum(CHAMADAS.values()) == 0, "2a execucao nao chamou a API (cache)")
 
     print()
