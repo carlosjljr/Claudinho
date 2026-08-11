@@ -833,11 +833,17 @@ def metricas_por_degrau(ensaio: Ensaio, cfg: Config) -> pd.DataFrame:
         t90 = _cruzamento(tau_j, resp_j, valor_inicial + 0.9 * passo)
         tempo_subida = t90 - t10 if np.isfinite(t10) and np.isfinite(t90) else np.nan
 
+        # Tempo de acomodacao: instante em que a resposta ENTRA na faixa
+        # de +-banda e nao sai mais ate o proximo degrau. NaN quando o
+        # degrau termina sem acomodar.
         banda = cfg.banda_acomodacao * passo
         fora_da_banda = np.flatnonzero(np.abs(resp_j - alvo) > banda)
-        tempo_acomodacao = (
-            float(tau_j[fora_da_banda[-1]] - inicio) if fora_da_banda.size else 0.0
-        )
+        if fora_da_banda.size == 0:
+            tempo_acomodacao = 0.0
+        elif fora_da_banda[-1] + 1 < tau_j.size:
+            tempo_acomodacao = float(tau_j[fora_da_banda[-1] + 1] - inicio)
+        else:
+            tempo_acomodacao = np.nan
 
         linhas.append(
             {
