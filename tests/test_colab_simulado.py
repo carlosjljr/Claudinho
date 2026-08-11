@@ -50,7 +50,7 @@ class Planilha:
                 linhas += [[fmt(a), fmt(b), fmt(c)] for a, b, c in zip(t, x, y)]
                 linhas.append([""])
                 self.tabelas[f"{cat}_{rep}"] = linhas
-        self.tabelas["III_D1000_1"] = [["massa_A", "", ""], ["t", "x", "y"]]
+        self.tabelas["ABA_FORA_DA_ANALISE_1"] = [["massa_A", "", ""], ["t", "x", "y"]]
 
     def worksheets(self):
         CHAMADAS["worksheets"] += 1

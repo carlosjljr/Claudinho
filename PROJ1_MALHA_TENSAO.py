@@ -14,11 +14,10 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-# Rótulos dos modelos de elementos finitos. Se quiser alinhar com a
-# nomenclatura dos protótipos (PE01/PE02), troque só aqui.
+# Modelos de elementos finitos, na mesma nomenclatura dos protótipos.
 MODELOS = {
-    "MEE03": "(a) MEE03 — modelo simplificado",
-    "MEE10": "(b) MEE10 — configuração final",
+    "PE01": "(a) PE01 — modelo simplificado",
+    "PE02": "(b) PE02 — configuração final",
 }
 
 ELEMENTOS = np.array([0.2, 0.4, 0.8, 1.0, 1.5])   # milhoes de elementos
@@ -26,25 +25,25 @@ FAIXA_ADOTADA = (0.7, 0.9)                        # malha escolhida
 LIMITE_CONVERGENCIA = 5.0                         # % de variacao aceita
 
 DADOS = {
-    ("MEE03", "com gravidade"): {
+    ("PE01", "com gravidade"): {
         "ENG 1": [19.593, 34.305, 30.590, 41.674, 46.414],
         "ENG 2": [39.035, 26.362, 32.050, 34.209, 34.339],
         "POT 1": [61.961, 115.390, 74.867, 109.560, 160.120],
         "POT 2": [124.040, 95.886, 17.024, 71.411, 99.586],
     },
-    ("MEE03", "sem gravidade"): {
+    ("PE01", "sem gravidade"): {
         "ENG 1": [18.705, 24.235, 20.665, 21.556, 33.037],
         "ENG 2": [20.664, 25.456, 31.147, 37.697, 28.234],
         "POT 1": [59.017, 110.560, 71.225, 105.530, 159.450],
         "POT 2": [89.519, 71.908, 23.485, 91.556, 143.450],
     },
-    ("MEE10", "com gravidade"): {
+    ("PE02", "com gravidade"): {
         "ENG 1": [21.335, 21.435, 28.325, 28.277, 38.338],
         "ENG 2": [33.003, 28.083, 31.020, 34.671, 34.031],
         "POT 1": [36.400, 25.670, 35.133, 33.606, 21.692],
         "POT 2": [121.240, 36.767, 114.550, 97.281, 145.230],
     },
-    ("MEE10", "sem gravidade"): {
+    ("PE02", "sem gravidade"): {
         "ENG 1": [20.620, 20.714, 27.261, 26.865, 36.095],
         "ENG 2": [31.449, 27.110, 29.392, 32.622, 32.093],
         "POT 1": [33.319, 26.164, 30.679, 35.443, 20.943],
@@ -67,6 +66,22 @@ plt.rcParams.update({
     "axes.grid": True, "grid.linestyle": "--", "grid.linewidth": 0.4,
     "grid.alpha": 0.6,
 })
+
+
+def garantir_drive():
+    """Monta o Drive se estiver no Colab e ainda nao estiver montado.
+
+    Assim a ordem das celulas nao importa: este modulo pode rodar antes
+    ou depois do de trajetoria.
+    """
+    if not PASTA_SAIDA.startswith("/content/drive"):
+        return
+    try:
+        from google.colab import drive
+    except ImportError:
+        return
+    if not os.path.isdir("/content/drive/MyDrive"):
+        drive.mount("/content/drive")
 
 
 def tabela_convergencia():
@@ -177,6 +192,7 @@ def figura_convergencia(convergencia):
 
 
 def executar():
+    garantir_drive()
     convergencia = tabela_convergencia()
 
     print("=== CONVERGENCIA DE MALHA (com gravidade) ===")

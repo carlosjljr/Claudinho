@@ -81,7 +81,7 @@ class PlanilhaFalsa:
                 linhas.append([""])  # linha curta, como o Sheets devolve
                 self.tabelas[f"{categoria}_{repeticao}"] = linhas
         # aba que existe na planilha mas nao esta na analise
-        self.tabelas["III_D1000_1"] = [["massa_A", "", ""], ["t", "x", "y"]]
+        self.tabelas["ABA_FORA_DA_ANALISE_1"] = [["massa_A", "", ""], ["t", "x", "y"]]
 
     def worksheets(self):
         CHAMADAS["worksheets"] += 1

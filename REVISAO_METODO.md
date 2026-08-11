@@ -279,10 +279,9 @@ Outras mudanças estruturais:
 - as ~81 variáveis globais do tipo `I_S1_P02_TEMPOS_PE01` viraram uma
   lista de objetos `Ensaio`, então acrescentar uma categoria ou um
   protótipo não exige copiar bloco de código;
-- abas ausentes geram aviso e são puladas em vez de derrubar a execução
-  (as categorias `II_D700`, `II_D1000` e `III_D1000` existem nas
-  planilhas mas não estão na lista de análise — basta acrescentá-las em
-  `Config.categorias`);
+- abas ausentes geram aviso e são puladas em vez de derrubar a execução;
+  a análise cobre apenas as seis categorias do ensaio I, por decisão do
+  autor — as demais abas das planilhas são ignoradas;
 - estilo das figuras centralizado em `rcParams`. As fontes de 24–26 pt
   em figura de 12×8 pol geravam legenda cobrindo os dados (visível nos
   gráficos enviados) e arquivos de 3600×2400 px. O padrão agora é 7×4,5

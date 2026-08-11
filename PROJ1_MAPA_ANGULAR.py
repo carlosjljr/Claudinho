@@ -58,6 +58,22 @@ plt.rcParams.update({
 })
 
 
+def garantir_drive():
+    """Monta o Drive se estiver no Colab e ainda nao estiver montado.
+
+    Assim a ordem das celulas nao importa: este modulo pode rodar antes
+    ou depois do de trajetoria.
+    """
+    if not PASTA_SAIDA.startswith("/content/drive"):
+        return
+    try:
+        from google.colab import drive
+    except ImportError:
+        return
+    if not os.path.isdir("/content/drive/MyDrive"):
+        drive.mount("/content/drive")
+
+
 def malha_comandada():
     """Devolve (theta1_desejado, theta2_desejado) da malha 5x5."""
     t1 = np.repeat(ALVOS, len(ALVOS)).astype(float)
@@ -238,6 +254,7 @@ def conferir_comprimentos():
 
 
 def executar():
+    garantir_drive()
     tabelas = [analisar(nome, dados) for nome, dados in PROTOTIPOS.items()]
     tabela = pd.concat(tabelas, ignore_index=True)
     repet = repetibilidade(tabela)
