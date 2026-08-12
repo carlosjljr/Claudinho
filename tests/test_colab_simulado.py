@@ -90,22 +90,22 @@ try:
 
     md = res["metricas_por_degrau"]
     p10 = md[md.categoria.str.endswith("P10")]
-    check(p10["tempo_acomodacao_s"].notna().all(), "degraus de 10 graus acomodaram (faixa acima da resolucao)")
+    check(p10["tempo_assentamento_s"].notna().all(), "degraus de 10 graus acomodaram (faixa acima da resolucao)")
     check(md["erro_regime_graus"].abs().max() < 0.5, f"erro de regime max {md['erro_regime_graus'].abs().max():.3f} deg")
 
     r = res["resumo_por_categoria"]
-    t01 = r[r.prototipo=="PE01"]["t_acomodacao_medio_s"].mean()
-    t02 = r[r.prototipo=="PE02"]["t_acomodacao_medio_s"].mean()
+    t01 = r[r.prototipo=="PE01"]["t_assentamento_medio_s"].mean()
+    t02 = r[r.prototipo=="PE02"]["t_assentamento_medio_s"].mean()
     check(np.isfinite(t01) and np.isfinite(t02),
-          f"tempo de acomodacao medio por prototipo: PE01={1000*t01:.0f} ms, PE02={1000*t02:.0f} ms")
+          f"tempo de assentamento medio por prototipo: PE01={1000*t01:.0f} ms, PE02={1000*t02:.0f} ms")
 
     check("ganho_servo" in r.columns and r["ganho_servo"].notna().all(),
           f"ganho do servo estimado por categoria: "
           f"{r['ganho_servo'].min():.3f}-{r['ganho_servo'].max():.3f}")
 
     pe = res["metricas_por_ensaio"]
-    check({"t_acomodacao_medio_s","t_acomodacao_desvio_s","t_acomodacao_max_s",
-           "degraus_sem_acomodar"}.issubset(pe.columns), "colunas de acomodacao por repeticao")
+    check({"t_assentamento_medio_s","t_assentamento_desvio_s","t_assentamento_max_s",
+           "degraus_sem_assentar"}.issubset(pe.columns), "colunas de assentamento por repeticao")
 
     print("\n=== ARQUIVOS ===")
     for raiz, _, arqs in sorted(os.walk(P.PASTA_RESULTADOS)):

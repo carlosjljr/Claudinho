@@ -57,15 +57,15 @@ PERIODO_DEGRAU_S = 1.0     # um degrau a cada 1 s (verificado nos dados)
 ANGULO_MAX_GRAUS = 180.0   # saturacao do servo
 FRACAO_JANELA_REGIME = 0.30
 
-# Faixa de acomodacao. Dois modos:
+# Faixa de assentamento. Dois modos:
 #   "passo"        -> +-BANDA * amplitude do degrau (convencao de controle)
 #   "valor_final"  -> +-BANDA * |valor final absoluto|
 # O 2o modo alarga a faixa conforme o braco sobe (a 180 graus, 2% sao
-# +-3,6 graus), o que encurta artificialmente o tempo de acomodacao nos
+# +-3,6 graus), o que encurta artificialmente o tempo de assentamento nos
 # degraus altos. Use "passo" para o artigo; "valor_final" so para
 # comparar com resultados calculados na outra convencao.
 BANDA_MODO = "passo"
-BANDA_ACOMODACAO = 0.05
+BANDA_ASSENTAMENTO = 0.05
 
 # --- Deteccao do inicio do movimento ---------------------------------
 FRACAO_TOLERANCIA_PLATO = 0.15
@@ -116,8 +116,6 @@ def _fonte(base):
     """Tamanho de fonte ja escalado para a figura do artigo."""
     return round(base * ESCALA_FONTE, 1)
 
-
-FONTE_CAIXA = _fonte(7.0)   # caixa do tempo de acomodacao
 
 matplotlib.rcParams.update({
     "figure.figsize": FIG_TAMANHO,
@@ -638,9 +636,9 @@ def verificar_cadencia(grupo):
 
 
 def largura_da_faixa(passo, alvo):
-    """Meia-largura da faixa de acomodacao, conforme BANDA_MODO."""
+    """Meia-largura da faixa de assentamento, conforme BANDA_MODO."""
     referencia = abs(passo) if BANDA_MODO == "passo" else abs(alvo)
-    return BANDA_ACOMODACAO * referencia
+    return BANDA_ASSENTAMENTO * referencia
 
 
 def curva_desejada_xy(ensaio):
@@ -657,7 +655,7 @@ def curva_desejada_xy(ensaio):
 
 
 # ---------------------------------------------------------------------
-# PARTE 5 - METRICAS (inclui o TEMPO DE ACOMODACAO)
+# PARTE 5 - METRICAS (inclui o TEMPO DE ASSENTAMENTO)
 # ---------------------------------------------------------------------
 def cruzamento(tau, sinal, nivel):
     """Primeiro instante em que `sinal` atinge `nivel` (interpolado)."""
@@ -674,7 +672,7 @@ def cruzamento(tau, sinal, nivel):
 
 
 def metricas_por_degrau(ensaio):
-    """Erro de regime, sobressinal, tempo de subida e de ACOMODACAO."""
+    """Erro de regime, sobressinal, tempo de subida e de ASSENTAMENTO."""
     passo = abs(ensaio["passo"])
     tau, resposta = ensaio["tau"], ensaio["theta_rel"]
     duracao = float(tau[-1]) if tau.size else 0.0
@@ -691,10 +689,10 @@ def metricas_por_degrau(ensaio):
         alvo, base = (k + 1) * passo, k * passo
 
         # VALOR EM QUE O DEGRAU REALMENTE ESTABILIZA. E esta a referencia
-        # do tempo de acomodacao -- nao o valor comandado. Os servos tem
+        # do tempo de assentamento -- nao o valor comandado. Os servos tem
         # erro de ganho (entregam ~92-98% do comandado), entao a resposta
         # nunca entraria numa faixa estreita em torno do comando, e o
-        # tempo de acomodacao sairia NaN mesmo com o braco parado.
+        # tempo de assentamento sairia NaN mesmo com o braco parado.
         # O desvio entre os dois vira o erro de regime, medido a parte.
         regime = resp_j[tau_j >= fim - FRACAO_JANELA_REGIME * PERIODO_DEGRAU_S]
         valor_final = float(np.median(regime)) if regime.size else np.nan
@@ -702,20 +700,20 @@ def metricas_por_degrau(ensaio):
         t10 = cruzamento(tau_j, resp_j, base + 0.10 * passo)
         t90 = cruzamento(tau_j, resp_j, base + 0.90 * passo)
 
-        # TEMPO DE ACOMODACAO: instante em que a resposta ENTRA na faixa
+        # TEMPO DE ASSENTAMENTO: instante em que a resposta ENTRA na faixa
         # em torno do valor final e nao sai mais ate o proximo degrau.
-        # NaN = o degrau acabou sem acomodar.
+        # NaN = o degrau acabou sem assentar.
         banda = largura_da_faixa(passo, valor_final)
         if np.isfinite(valor_final):
             fora = np.flatnonzero(np.abs(resp_j - valor_final) > banda)
         else:
             fora = np.arange(tau_j.size)
         if fora.size == 0:
-            t_acomodacao = 0.0
+            t_assentamento = 0.0
         elif fora[-1] + 1 < tau_j.size:
-            t_acomodacao = float(tau_j[fora[-1] + 1] - inicio)
+            t_assentamento = float(tau_j[fora[-1] + 1] - inicio)
         else:
-            t_acomodacao = np.nan
+            t_assentamento = np.nan
 
         pico = float(np.max(resp_j))
         linhas.append({
@@ -729,14 +727,14 @@ def metricas_por_degrau(ensaio):
             "sobressinal_graus": pico - valor_final,
             "sobressinal_pct": 100.0 * (pico - valor_final) / passo,
             "tempo_subida_s": t90 - t10 if np.isfinite(t10) and np.isfinite(t90) else np.nan,
-            "tempo_acomodacao_s": t_acomodacao,
-            "faixa_acomodacao_graus": banda,
+            "tempo_assentamento_s": t_assentamento,
+            "faixa_assentamento_graus": banda,
         })
     return pd.DataFrame(linhas)
 
 
 def metricas_do_ensaio(ensaio, por_degrau):
-    """Uma linha por repeticao, com o tempo de acomodacao medio."""
+    """Uma linha por repeticao, com o tempo de assentamento medio."""
     comando = trajetoria_desejada(ensaio["tau"], ensaio["passo"])
     depois = ensaio["tau"] >= 0
     erro = ensaio["theta_rel"][depois] - comando[depois]
@@ -761,10 +759,10 @@ def metricas_do_ensaio(ensaio, por_degrau):
         "sentido": ensaio["sentido"],
         "algarismos_significativos": ensaio["algarismos"],
         "resolucao_angular_graus": ensaio["resolucao_angular"],
-        "t_acomodacao_medio_s": meu["tempo_acomodacao_s"].mean(),
-        "t_acomodacao_desvio_s": meu["tempo_acomodacao_s"].std(),
-        "t_acomodacao_max_s": meu["tempo_acomodacao_s"].max(),
-        "degraus_sem_acomodar": int(meu["tempo_acomodacao_s"].isna().sum()),
+        "t_assentamento_medio_s": meu["tempo_assentamento_s"].mean(),
+        "t_assentamento_desvio_s": meu["tempo_assentamento_s"].std(),
+        "t_assentamento_max_s": meu["tempo_assentamento_s"].max(),
+        "degraus_sem_assentar": int(meu["tempo_assentamento_s"].isna().sum()),
         "tempo_subida_medio_s": meu["tempo_subida_s"].mean(),
         "sobressinal_medio_pct": meu["sobressinal_pct"].mean(),
         "rmse_graus": float(np.sqrt(np.mean(erro**2))) if erro.size else np.nan,
@@ -798,36 +796,24 @@ def salvar_figura_traj(fig, subpasta, nome):
     plt.close(fig)
 
 
-def texto_acomodacao(grupo, por_degrau):
-    """Caixa compacta com o tempo de acomodacao e a media.
+def rotulos_com_assentamento(grupo, por_degrau):
+    """Rotulo de cada curva com o tempo de assentamento embutido.
 
-    Formato curto de proposito: a caixa fica DENTRO dos eixos, e com a
-    fonte ampliada para o artigo um texto longo tomaria metade da
-    figura.
+    Em vez de uma caixa separada, o valor entra na propria legenda:
+    "Exp 1 — T_ass = 192 ms". Uma legenda so, sem caixa concorrente,
+    libera a area do grafico.
     """
-    valores, medias, sem_acomodar = [], [], 0
+    rotulos = []
     for ensaio in grupo:
         meu = por_degrau[
             (por_degrau["prototipo"] == ensaio["prototipo"])
             & (por_degrau["categoria"] == ensaio["categoria"])
             & (por_degrau["repeticao"] == ensaio["repeticao"])
-        ]["tempo_acomodacao_s"]
+        ]["tempo_assentamento_s"]
         media = meu.mean()
-        sem_acomodar += int(meu.isna().sum())
-        if np.isfinite(media):
-            medias.append(media)
-            valores.append(f"{1000 * media:.0f}")
-        else:
-            valores.append("--")
-
-    linhas = [f"$t_{{acom}}$ (±{100 * BANDA_ACOMODACAO:.0f}% do passo)",
-              "Exp: " + " / ".join(valores) + " ms"]
-    if medias:
-        linhas.append(f"Média: {1000 * np.mean(medias):.0f} "
-                      f"± {1000 * np.std(medias):.0f} ms")
-    if sem_acomodar:
-        linhas.append(f"({sem_acomodar} degrau(s) sem acomodar)")
-    return "\n".join(linhas)
+        valor = f"{1000 * media:.0f} ms" if np.isfinite(media) else "n/d"
+        rotulos.append(f"Exp {ensaio['repeticao']} — $T_{{ass}}$ = {valor}")
+    return rotulos
 
 
 def plot_xy_solo(grupo):
@@ -852,46 +838,43 @@ def plot_xy(grupo, por_degrau):
     """Trajetoria no plano, no referencial da junta, com o arco desejado."""
     ref = grupo[0]
     fig, eixo = plt.subplots(figsize=FIG_TAMANHO, layout="constrained")
-    for ensaio in grupo:
+    for ensaio, rotulo in zip(grupo, rotulos_com_assentamento(grupo, por_degrau)):
         eixo.plot(ensaio["x"] - ensaio["centro"][0],
-                  ensaio["y"] - ensaio["centro"][1],
-                  label=f"Experimento {ensaio['repeticao']}")
+                  ensaio["y"] - ensaio["centro"][1], label=rotulo)
     x_des, y_des = curva_desejada_xy(ref)
     eixo.plot(x_des - ref["centro"][0], y_des - ref["centro"][1],
               "k--", linewidth=1.8, label="Trajetória desejada")
     eixo.plot(0, 0, "k+", markersize=9)
-    eixo.text(0.02, 0.02, texto_acomodacao(grupo, por_degrau),
-              transform=eixo.transAxes, fontsize=FONTE_CAIXA,
-              va="bottom", ha="left", linespacing=1.35,
-              bbox=dict(boxstyle="round", facecolor="white", alpha=0.85, lw=0.5))
     eixo.set_xlabel("X (mm) — origem na junta")
     eixo.set_ylabel("Y (mm) — origem na junta")
     eixo.set_title(f"{ref['prototipo']} — {ref['categoria']}")
-    eixo.legend(loc="upper right")
+    eixo.legend(loc="lower right", handlelength=1.4, borderpad=0.4,
+                labelspacing=0.25, framealpha=0.92)
     eixo.set_aspect("equal", adjustable="datalim")
     salvar_figura_traj(fig, "GRAFICOS COMBINADO", f"grafico_combinado_{ref['prototipo']}_{ref['categoria']}")
 
 
 def plot_angulo(grupo, por_degrau, zoom=None):
-    """Angulo x tempo desde o comando, com a escada e o t. de acomodacao."""
+    """Angulo x tempo desde o comando, com a escada e o t. de assentamento."""
     ref = grupo[0]
     fig, eixo = plt.subplots(figsize=FIG_TAMANHO, layout="constrained")
     limite = zoom if zoom else max(float(e["tau"][-1]) for e in grupo)
 
     medidos = []
-    for ensaio in grupo:
+    rotulos = rotulos_com_assentamento(grupo, por_degrau)
+    for ensaio, rotulo in zip(grupo, rotulos):
         corte = (ensaio["tau"] >= -MARGEM_PRE_COMANDO) & (ensaio["tau"] <= limite)
-        eixo.plot(ensaio["tau"][corte], ensaio["theta_rel"][corte],
-                  label=f"Experimento {ensaio['repeticao']}")
+        eixo.plot(ensaio["tau"][corte], ensaio["theta_rel"][corte], label=rotulo)
         medidos.append(ensaio["theta_rel"][corte])
 
     tau_cmd = np.linspace(-MARGEM_PRE_COMANDO, limite, 2000)
     eixo.plot(tau_cmd, trajetoria_desejada(tau_cmd, ref["passo"]),
               "k--", linewidth=1.8, label="Comando (desejado)")
 
-    # faixa usada para medir o tempo de acomodacao
+    # faixa usada para medir o tempo de assentamento
     passo = abs(ref["passo"])
-    rotulo_faixa = f"Faixa de ±{100*BANDA_ACOMODACAO:.0f}% ({BANDA_MODO})"
+    referencia = "do passo" if BANDA_MODO == "passo" else "do valor final"
+    rotulo_faixa = f"Faixa ±{100 * BANDA_ASSENTAMENTO:.0f}% {referencia}"
     for k in range(int(np.ceil(limite / PERIODO_DEGRAU_S))):
         alvo = (k + 1) * passo
         if alvo > ANGULO_MAX_GRAUS:
@@ -902,25 +885,20 @@ def plot_angulo(grupo, por_degrau, zoom=None):
                           color="0.6", alpha=0.25, linewidth=0,
                           label=rotulo_faixa if k == 0 else None)
 
-    # Limita o eixo aos dados medidos e ainda reserva espaco no topo: a
-    # legenda fica dentro dos eixos e, sem essa folga, cobriria o
-    # primeiro patamar da escada -- justamente onde se le a acomodacao.
+    # A legenda fica no canto inferior direito, entao a folga vai
+    # EMBAIXO: assim ela ocupa area vazia e nao cobre a escada.
     juntos = np.concatenate(medidos) if medidos else np.empty(0)
     if juntos.size:
         menor, maior = float(np.min(juntos)), float(np.max(juntos))
         amplitude = max(maior - menor, passo)
-        eixo.set_ylim(menor - 0.08 * amplitude, maior + 0.55 * amplitude)
+        eixo.set_ylim(menor - 0.18 * amplitude, maior + 0.08 * amplitude)
 
-    eixo.text(0.98, 0.02, texto_acomodacao(grupo, por_degrau),
-              transform=eixo.transAxes, fontsize=FONTE_CAIXA,
-              va="bottom", ha="right", linespacing=1.35,
-              bbox=dict(boxstyle="round", facecolor="white", alpha=0.85, lw=0.5))
     eixo.set_xlabel("Tempo desde o comando (s)")
     eixo.set_ylabel("Deslocamento angular (graus)")
     sufixo = f" — zoom 0–{limite:g} s" if zoom else ""
     eixo.set_title(f"{ref['prototipo']} — {ref['categoria']}{sufixo}")
-    eixo.legend(loc="upper left", ncol=2, handlelength=1.4,
-                columnspacing=1.0, borderpad=0.4, labelspacing=0.3)
+    eixo.legend(loc="lower right", handlelength=1.4, borderpad=0.4,
+                labelspacing=0.25, framealpha=0.92)
     nome = ("angulo_zoom_" if zoom else "angulo_") + f"{ref['prototipo']}_{ref['categoria']}"
     salvar_figura_traj(fig, "GRAFICO DE ANGULOS COM ZOOM" if zoom else "GRAFICO ANGULOS COMBINADOS", nome)
 
@@ -954,8 +932,8 @@ def plot_media(grupo, por_degrau):
     salvar_figura_traj(fig, "MEDIA E DESVIO", f"media_{ref['prototipo']}_{ref['categoria']}")
 
 
-def plot_acomodacao(grupo, por_degrau):
-    """Tempo de acomodacao degrau a degrau, por repeticao."""
+def plot_assentamento(grupo, por_degrau):
+    """Tempo de assentamento degrau a degrau, por repeticao."""
     ref = grupo[0]
     fig, eixo = plt.subplots(figsize=FIG_TAMANHO, layout="constrained")
     todos = []
@@ -967,31 +945,31 @@ def plot_acomodacao(grupo, por_degrau):
         ]
         if meu.empty:
             continue
-        eixo.plot(meu["degrau"], 1000 * meu["tempo_acomodacao_s"], "o-",
+        eixo.plot(meu["degrau"], 1000 * meu["tempo_assentamento_s"], "o-",
                   markersize=4, label=f"Experimento {ensaio['repeticao']}")
-        todos.append(meu["tempo_acomodacao_s"].to_numpy())
+        todos.append(meu["tempo_assentamento_s"].to_numpy())
     if todos:
         media = float(np.nanmean(np.concatenate(todos)))
         eixo.axhline(1000 * media, color="k", linestyle="--", linewidth=1.5,
                      label=f"Média: {1000*media:.0f} ms")
     eixo.set_xlabel("Degrau")
-    eixo.set_ylabel("Tempo de acomodação (ms)")
+    eixo.set_ylabel("Tempo de assentamento (ms)")
     eixo.set_title(f"{ref['prototipo']} — {ref['categoria']} "
-                   f"(±{100*BANDA_ACOMODACAO:.0f}% {BANDA_MODO})")
+                   f"(±{100*BANDA_ASSENTAMENTO:.0f}% {BANDA_MODO})")
     eixo.legend(loc="best")
-    salvar_figura_traj(fig, "TEMPO DE ACOMODACAO", f"acomodacao_{ref['prototipo']}_{ref['categoria']}")
+    salvar_figura_traj(fig, "TEMPO DE ASSENTAMENTO", f"assentamento_{ref['prototipo']}_{ref['categoria']}")
 
 
 def plot_comparacao_prototipos(resumo):
-    """PE01 x PE02: tempo de acomodacao medio por categoria."""
+    """PE01 x PE02: tempo de assentamento medio por categoria."""
     if resumo.empty:
         return
     tabela = resumo.pivot_table(index="categoria", columns="prototipo",
-                                values="t_acomodacao_medio_s", aggfunc="mean")
+                                values="t_assentamento_medio_s", aggfunc="mean")
     # O desvio entre degraus ja vem calculado no resumo; usar aggfunc="std"
     # aqui daria NaN, porque ha um unico valor por (categoria, prototipo).
     erros = resumo.pivot_table(index="categoria", columns="prototipo",
-                               values="t_acomodacao_desvio_s", aggfunc="mean")
+                               values="t_assentamento_desvio_s", aggfunc="mean")
     erros = erros.reindex(index=tabela.index, columns=tabela.columns).fillna(0.0)
     fig, eixo = plt.subplots(figsize=FIG_TAMANHO, layout="constrained")
     posicoes = np.arange(len(tabela.index))
@@ -1002,10 +980,10 @@ def plot_comparacao_prototipos(resumo):
                  capsize=3, label=coluna)
     eixo.set_xticks(posicoes + largura * (len(tabela.columns) - 1) / 2)
     eixo.set_xticklabels(tabela.index, rotation=30, ha="right")
-    eixo.set_ylabel("Tempo de acomodação médio (ms)")
+    eixo.set_ylabel("Tempo de assentamento médio (ms)")
     eixo.set_title("Comparação entre protótipos (±5% do passo)")
     eixo.legend(loc="best")
-    salvar_figura_traj(fig, "TEMPO DE ACOMODACAO", "comparacao_prototipos_acomodacao")
+    salvar_figura_traj(fig, "TEMPO DE ASSENTAMENTO", "comparacao_prototipos_assentamento")
 
 
 # ---------------------------------------------------------------------
@@ -1028,10 +1006,10 @@ def executar_trajetoria(cliente=None):
     por_degrau = pd.concat(tabelas, ignore_index=True) if tabelas else pd.DataFrame()
     por_ensaio = pd.DataFrame([metricas_do_ensaio(e, por_degrau) for e in ensaios])
 
-    # A faixa de acomodacao pode ser menor que a resolucao dos dados. Com
+    # A faixa de assentamento pode ser menor que a resolucao dos dados. Com
     # 3 algarismos significativos a incerteza chega a 0,25 graus; para o
     # passo de 2 graus a faixa de +-5% e +-0,1 grau. Nesse caso o tempo de
-    # acomodacao NAO e mensuravel e nao deve ir para o artigo.
+    # assentamento NAO e mensuravel e nao deve ir para o artigo.
     avisados = set()
     for ensaio in ensaios:
         banda = largura_da_faixa(abs(ensaio["passo"]), abs(ensaio["passo"]))
@@ -1040,7 +1018,7 @@ def executar_trajetoria(cliente=None):
             avisados.add(chave)
             print(f"  ! {chave[0]}/{chave[1]}: faixa de ±{banda:.2f}° é menor que a "
                   f"resolução dos dados (±{ensaio['resolucao_angular_max']:.2f}°). "
-                  f"O tempo de acomodação desta categoria NÃO é confiável — "
+                  f"O tempo de assentamento desta categoria NÃO é confiável — "
                   f"reexporte do Tracker com mais casas decimais.")
 
     def ganho(bloco):
@@ -1056,13 +1034,13 @@ def executar_trajetoria(cliente=None):
         resumo = (por_degrau.groupby(["prototipo", "categoria"])
                   .agg(erro_regime_medio_graus=("erro_regime_graus", "mean"),
                        erro_regime_desvio_graus=("erro_regime_graus", "std"),
-                       t_acomodacao_medio_s=("tempo_acomodacao_s", "mean"),
-                       t_acomodacao_desvio_s=("tempo_acomodacao_s", "std"),
-                       t_acomodacao_max_s=("tempo_acomodacao_s", "max"),
+                       t_assentamento_medio_s=("tempo_assentamento_s", "mean"),
+                       t_assentamento_desvio_s=("tempo_assentamento_s", "std"),
+                       t_assentamento_max_s=("tempo_assentamento_s", "max"),
                        tempo_subida_medio_s=("tempo_subida_s", "mean"),
                        sobressinal_medio_pct=("sobressinal_pct", "mean"),
                        degraus_avaliados=("degrau", "count"),
-                       degraus_sem_acomodar=("tempo_acomodacao_s",
+                       degraus_sem_assentar=("tempo_assentamento_s",
                                              lambda s: int(s.isna().sum())))
                   .reset_index())
         ganhos = (por_degrau.groupby(["prototipo", "categoria"])
@@ -1083,7 +1061,7 @@ def executar_trajetoria(cliente=None):
         plot_angulo(grupo, por_degrau)
         plot_angulo(grupo, por_degrau, zoom=ZOOM_SEGUNDOS)
         plot_media(grupo, por_degrau)
-        plot_acomodacao(grupo, por_degrau)
+        plot_assentamento(grupo, por_degrau)
     plot_comparacao_prototipos(resumo)
 
     print("PARTE 5/5 - Exportação")
@@ -1097,10 +1075,10 @@ def executar_trajetoria(cliente=None):
     print(f"Concluído. Resultados em {PASTA_RESULTADOS}")
 
     if not resumo.empty:
-        print("\n=== TEMPO DE ACOMODAÇÃO (ms) ===")
+        print("\n=== TEMPO DE ASSENTAMENTO (ms) ===")
         vista = resumo[["prototipo", "categoria",
-                        "t_acomodacao_medio_s", "t_acomodacao_desvio_s",
-                        "t_acomodacao_max_s"]].copy()
+                        "t_assentamento_medio_s", "t_assentamento_desvio_s",
+                        "t_assentamento_max_s"]].copy()
         for coluna in vista.columns[2:]:
             vista[coluna] = (1000 * vista[coluna]).round(0)
         vista.columns = ["Protótipo", "Categoria", "Média", "Desvio", "Máximo"]
