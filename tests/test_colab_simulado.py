@@ -23,7 +23,7 @@ for proto, cats in P.ELOS.items():
         RAIOS[(proto, cat)] = (params.get("AB", 0.0) if "S1" in cat else 0.0) + params["BC"]
 
 CHAMADAS = {"open": 0, "worksheets": 0, "batch": 0}
-fmt = lambda v: f"{v:.2E}".replace(".", ",")   # formato real do Tracker
+fmt = lambda v: v   # UNFORMATTED_VALUE devolve numero, nao texto
 
 
 class Aba:
@@ -56,8 +56,12 @@ class Planilha:
         CHAMADAS["worksheets"] += 1
         return [Aba(n) for n in self.tabelas]
 
-    def values_batch_get(self, ranges):
+    def values_batch_get(self, ranges, params=None):
         CHAMADAS["batch"] += 1
+        # Sem UNFORMATTED_VALUE a API devolveria o texto formatado com 3
+        # algarismos significativos, que era a origem da quantizacao.
+        assert (params or {}).get("valueRenderOption") == "UNFORMATTED_VALUE", \
+            "a leitura precisa pedir valores nao formatados"
         return {"valueRanges": [
             {"values": self.tabelas[f.split("!")[0].strip("'")]} for f in ranges]}
 
@@ -87,13 +91,17 @@ try:
     md = res["metricas_por_degrau"]
     p10 = md[md.categoria.str.endswith("P10")]
     check(p10["tempo_acomodacao_s"].notna().all(), "degraus de 10 graus acomodaram (faixa acima da resolucao)")
-    check(md["erro_graus"].abs().max() < 0.4, f"erro de regime max {md['erro_graus'].abs().max():.3f} deg")
+    check(md["erro_regime_graus"].abs().max() < 0.5, f"erro de regime max {md['erro_regime_graus'].abs().max():.3f} deg")
 
     r = res["resumo_por_categoria"]
     t01 = r[r.prototipo=="PE01"]["t_acomodacao_medio_s"].mean()
     t02 = r[r.prototipo=="PE02"]["t_acomodacao_medio_s"].mean()
     check(np.isfinite(t01) and np.isfinite(t02),
           f"tempo de acomodacao medio por prototipo: PE01={1000*t01:.0f} ms, PE02={1000*t02:.0f} ms")
+
+    check("ganho_servo" in r.columns and r["ganho_servo"].notna().all(),
+          f"ganho do servo estimado por categoria: "
+          f"{r['ganho_servo'].min():.3f}-{r['ganho_servo'].max():.3f}")
 
     pe = res["metricas_por_ensaio"]
     check({"t_acomodacao_medio_s","t_acomodacao_desvio_s","t_acomodacao_max_s",

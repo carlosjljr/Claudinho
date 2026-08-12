@@ -170,45 +170,57 @@ comum, obtida por **interpolação** — não por repetição do último valor.
 
 Tudo sai em CSV (`;` e vírgula decimal, abre direto no Excel pt-BR).
 
-### 3.6 Achado importante: os dados estão gravados com 3 algarismos significativos
+### 3.6 Correção: os dados NÃO estão quantizados — a exibição está
 
-Repare no formato que sai do Tracker e fica na planilha:
+Numa revisão anterior eu afirmei, a partir do que `get_all_values()`
+devolvia (`3,07E+02`), que os dados estavam gravados com 3 algarismos
+significativos. **Isso estava errado, e a diferença é grande.**
 
+Abrindo os arquivos `.xlsx` diretamente, os valores são
+`304.9547` e `9.327424` — precisão total. Os 3 algarismos eram apenas o
+**formato de exibição** da planilha, e `get_all_values()` devolve o
+texto como aparece na tela, não o valor armazenado.
+
+A correção é uma linha na leitura:
+
+```python
+planilha.values_batch_get(faixas,
+                          params={"valueRenderOption": "UNFORMATTED_VALUE"})
 ```
-0,00E+00   3,07E+02   5,03E+00
-```
 
-São **três algarismos significativos**. Perto de x = 307 mm isso
-significa que x só pode assumir valores inteiros — o passo mínimo
-representável é 1 mm. Propagando para o ângulo:
+Sem ela, três consequências reais:
 
-$$\delta\theta = \frac{\sqrt{(\Delta y\,q_x)^2 + (\Delta x\,q_y)^2}}{r^2}$$
+1. x e y chegavam quantizados, com até 0,25° de incerteza angular;
+2. o eixo de tempo também: nas 12 abas de passo 2°, que duram ~90 s,
+   **59% dos instantes se repetiam** (`10,0 / 10,0 / 10,1`), porque
+   acima de 10 s o passo representável passa a ser 0,1 s enquanto o
+   vídeo amostra a cada 0,0333 s. A mediana das diferenças dava
+   exatamente zero — foi essa a origem do `ZeroDivisionError`;
+3. a ondulação de ±0,3° do regime permanente ficava indistinguível do
+   arredondamento.
 
-| raio | pior caso de δθ | δθ típico |
-|---|---|---|
-| R = 306 mm (servo 1, PE01) | 0,19° | 0,12° |
-| R = 111 mm (servo 2, PE10) | 0,23° | 0,05° |
+Com os valores não formatados, o ruído medido no regime permanente é de
+**0,005° a 0,16°** conforme a categoria, bem abaixo da faixa de
+acomodação em quase todos os casos. A ondulação, portanto, é real, e não
+artefato de arredondamento.
 
-Duas consequências:
+Como reforço, o passo de amostragem passou a ser calculado como
+`(t_final − t_inicial) / (n − 1)` em vez da mediana das diferenças:
+a filmagem é uniforme, e essa forma não se deixa enganar por instantes
+repetidos nem por um quadro perdido.
 
-1. **A ondulação de ±0,3° que aparece no regime permanente dos seus
-   gráficos é da mesma ordem da quantização.** Não dá para afirmar, com
-   os dados como estão, que ela é oscilação real do servo (*dither*) —
-   parte dela é arredondamento do arquivo. Se essa ondulação for um
-   resultado do artigo, vale reexportar do Tracker com mais casas
-   decimais antes de discuti-la.
-2. **A quantização é sistemática, não aleatória**, então não some com
-   média: ela desloca o ajuste de circunferência. Foi assim que
-   encontrei o problema — nos testes, o ajuste livre num arco de 40°
-   com dados quantizados deslocou o centro em 1,8 mm e produziu um erro
-   de regime que crescia degrau a degrau, chegando a 1,3°. Com o ajuste
-   de raio fixo, o mesmo caso cai para 0,09°.
+### 3.6.1 O tempo de acomodação se mede em torno do valor medido
 
-O script agora detecta o número de algarismos significativos dos dados,
-calcula essa incerteza e a exporta em `metricas_por_ensaio.csv`
-(colunas `algarismos_significativos`, `resolucao_angular_graus`,
-`resolucao_angular_max_graus`), avisando no log quando ela passa de 10%
-do passo comandado.
+Segundo erro meu, encontrado ao rodar nos dados reais: eu media a
+acomodação em torno do **valor comandado**. Os servos têm erro de ganho
+— entregam de 87% a 95% do comandado —, então a resposta se estabiliza
+fora de uma faixa estreita em torno do comando e o tempo de acomodação
+saía `NaN` mesmo com o braço parado.
+
+A convenção correta, e a que o script de acomodação trazido pelo autor
+já usava, é medir em torno do **valor em que o degrau realmente
+estabiliza** (mediana dos últimos 30% da janela). O desvio entre esse
+valor e o comando é o **erro de regime**, uma métrica separada.
 
 ### 3.7 Demais incertezas a declarar no artigo
 

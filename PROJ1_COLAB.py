@@ -42,6 +42,11 @@ CATEGORIAS = (
 )
 N_REPETICOES = 3
 
+# Fonte alternativa: arquivos .xlsx locais (baixados do Drive). Deixe
+# vazio para ler do Google Sheets. Util para rodar sem API e para
+# reprocessar offline.
+ARQUIVOS_XLSX = {}   # ex.: {"PE01": "/content/PROJ_1_PE01.xlsx", ...}
+
 PASTA_DRIVE = "/content/drive/MyDrive/CTG_UFPE/PROJETOS/PROJ 1"
 PASTA_RESULTADOS = os.path.join(PASTA_DRIVE, "RESULTADOS")
 PASTA_CACHE = os.path.join(PASTA_DRIVE, "CACHE_DADOS")
@@ -140,7 +145,13 @@ def com_retry(funcao, *args, tentativas=5, **kwargs):
             return funcao(*args, **kwargs)
         except Exception as erro:
             codigo = getattr(getattr(erro, "response", None), "status_code", None)
-            if tentativa == tentativas or codigo not in (429, 500, 502, 503, 504, None):
+            # So repete o que e transitorio. Sem esta distincao um erro de
+            # programacao (TypeError, KeyError) seria repetido 5 vezes,
+            # gastando 30 s antes de mostrar a causa real.
+            transitorio = (codigo in (429, 500, 502, 503, 504)
+                           or (codigo is None
+                               and isinstance(erro, (ConnectionError, TimeoutError, OSError))))
+            if tentativa == tentativas or not transitorio:
                 raise
             print(f"  ! API falhou ({codigo}); tentando de novo em {espera:.0f}s")
             time.sleep(espera)
@@ -168,8 +179,12 @@ def raio_nominal(prototipo, categoria):
 
 
 def para_float(valores):
-    """Converte texto pt-BR ("3,07E+02") em float, sem estourar excecao."""
-    serie = pd.Series(list(valores), dtype="object").astype(str).str.strip()
+    """Converte para float. Aceita numero ou texto pt-BR ("3,07E+02")."""
+    serie = pd.Series(list(valores), dtype="object")
+    numericos = pd.to_numeric(serie, errors="coerce")
+    if numericos.notna().sum() >= serie.notna().sum():
+        return numericos.to_numpy(dtype=float)   # ja vieram como numero
+    serie = serie.astype(str).str.strip()
     ambos = (serie.str.contains(".", regex=False)
              & serie.str.contains(",", regex=False))
     serie = serie.mask(ambos, serie.str.replace(".", "", regex=False))
@@ -187,6 +202,48 @@ def extrair_txy(linhas):
     y = para_float([l[2] for l in tabela])
     ok = np.isfinite(t) & np.isfinite(x) & np.isfinite(y)
     return t[ok], x[ok], y[ok]
+
+
+def passo_de_tempo(t):
+    """Passo de amostragem robusto.
+
+    Usa o intervalo total dividido pelo numero de quadros, em vez da
+    mediana das diferencas: a filmagem e uniforme, e essa forma nao se
+    deixa enganar por instantes repetidos ou por um quadro perdido.
+    """
+    if t.size < 2:
+        return np.nan
+    dt = (float(t[-1]) - float(t[0])) / (t.size - 1)
+    return dt if dt > 0 else np.nan
+
+
+def carregar_de_xlsx():
+    """Le os ensaios de arquivos .xlsx locais (mesma estrutura das abas)."""
+    import openpyxl
+
+    abas = [f"{c}_{i}" for c in CATEGORIAS for i in range(1, N_REPETICOES + 1)]
+    ensaios = []
+    for prototipo, caminho in ARQUIVOS_XLSX.items():
+        print(f"  Lendo {prototipo} ({os.path.basename(caminho)})")
+        livro = openpyxl.load_workbook(caminho, read_only=True, data_only=True)
+        for aba in abas:
+            if aba not in livro.sheetnames:
+                print(f"  ! {prototipo}: aba {aba} ausente")
+                continue
+            linhas = [linha[:3] for linha
+                      in livro[aba].iter_rows(min_row=1, values_only=True)]
+            t, x, y = extrair_txy(linhas)
+            if t.size < 5:
+                print(f"  ! {prototipo}/{aba}: dados insuficientes, ignorado")
+                continue
+            categoria, _, sufixo = aba.rpartition("_")
+            ensaios.append({
+                "prototipo": prototipo, "categoria": categoria,
+                "repeticao": int(sufixo), "t": t, "x": x, "y": y,
+                "passo": passo_da_categoria(categoria),
+            })
+        livro.close()
+    return ensaios
 
 
 def caminho_cache(prototipo, aba):
@@ -218,8 +275,14 @@ def carregar_ensaios(cliente=None):
                 print(f"  ! {prototipo}: abas ausentes -> {', '.join(ausentes)}")
             if alvo:
                 print(f"  Lendo {prototipo} ({arquivo}): {len(alvo)} abas de uma vez")
+                # UNFORMATTED_VALUE e essencial: sem isso a API devolve o
+                # texto COMO APARECE na tela ("3,07E+02"), com 3 algarismos
+                # significativos. Isso quantizava x e y em ate 0,25 graus e,
+                # nas abas de 90 s, fazia 59% dos instantes se repetirem
+                # (10,0 / 10,0 / 10,1), zerando o passo de tempo.
                 resposta = com_retry(
-                    planilha.values_batch_get, [f"'{a}'!A:C" for a in alvo]
+                    planilha.values_batch_get, [f"'{a}'!A:C" for a in alvo],
+                    params={"valueRenderOption": "UNFORMATTED_VALUE"}
                 )
                 blocos = resposta.get("valueRanges", [])
                 brutos = {a: b.get("values", []) for a, b in zip(alvo, blocos)}
@@ -434,7 +497,7 @@ def preparar(ensaio):
         # comparar theta cru com uma curva que comeca em zero era o que
         # fazia as curvas nunca se encontrarem.
         "theta_rel": sentido * (theta - repouso),
-        "dt": float(np.median(np.diff(ensaio["t"]))) if ensaio["t"].size > 1 else np.nan,
+        "dt": passo_de_tempo(ensaio["t"]),
         "resolucao_angular": mediana_res,
         "resolucao_angular_max": max_res,
         "algarismos": digitos,
@@ -614,17 +677,26 @@ def metricas_por_degrau(ensaio):
         tau_j, resp_j = tau[janela], resposta[janela]
         alvo, base = (k + 1) * passo, k * passo
 
+        # VALOR EM QUE O DEGRAU REALMENTE ESTABILIZA. E esta a referencia
+        # do tempo de acomodacao -- nao o valor comandado. Os servos tem
+        # erro de ganho (entregam ~92-98% do comandado), entao a resposta
+        # nunca entraria numa faixa estreita em torno do comando, e o
+        # tempo de acomodacao sairia NaN mesmo com o braco parado.
+        # O desvio entre os dois vira o erro de regime, medido a parte.
         regime = resp_j[tau_j >= fim - FRACAO_JANELA_REGIME * PERIODO_DEGRAU_S]
-        valor_regime = float(np.mean(regime)) if regime.size else np.nan
+        valor_final = float(np.median(regime)) if regime.size else np.nan
 
         t10 = cruzamento(tau_j, resp_j, base + 0.10 * passo)
         t90 = cruzamento(tau_j, resp_j, base + 0.90 * passo)
 
         # TEMPO DE ACOMODACAO: instante em que a resposta ENTRA na faixa
-        # de +-5% do passo e nao sai mais ate o proximo degrau.
+        # em torno do valor final e nao sai mais ate o proximo degrau.
         # NaN = o degrau acabou sem acomodar.
-        banda = largura_da_faixa(passo, alvo)
-        fora = np.flatnonzero(np.abs(resp_j - alvo) > banda)
+        banda = largura_da_faixa(passo, valor_final)
+        if np.isfinite(valor_final):
+            fora = np.flatnonzero(np.abs(resp_j - valor_final) > banda)
+        else:
+            fora = np.arange(tau_j.size)
         if fora.size == 0:
             t_acomodacao = 0.0
         elif fora[-1] + 1 < tau_j.size:
@@ -638,11 +710,11 @@ def metricas_por_degrau(ensaio):
             "categoria": ensaio["categoria"],
             "repeticao": ensaio["repeticao"],
             "degrau": k + 1,
-            "alvo_graus": alvo,
-            "regime_graus": valor_regime,
-            "erro_graus": valor_regime - alvo,
-            "sobressinal_graus": pico - alvo,
-            "sobressinal_pct": 100.0 * (pico - alvo) / passo,
+            "alvo_comandado_graus": alvo,
+            "valor_final_graus": valor_final,
+            "erro_regime_graus": valor_final - alvo,
+            "sobressinal_graus": pico - valor_final,
+            "sobressinal_pct": 100.0 * (pico - valor_final) / passo,
             "tempo_subida_s": t90 - t10 if np.isfinite(t10) and np.isfinite(t90) else np.nan,
             "tempo_acomodacao_s": t_acomodacao,
             "faixa_acomodacao_graus": banda,
@@ -665,7 +737,9 @@ def metricas_do_ensaio(ensaio, por_degrau):
         "categoria": ensaio["categoria"],
         "repeticao": ensaio["repeticao"],
         "duracao_s": float(ensaio["tau"][-1]) if ensaio["tau"].size else np.nan,
-        "taxa_amostragem_hz": 1.0 / ensaio["dt"] if np.isfinite(ensaio["dt"]) else np.nan,
+        "taxa_amostragem_hz": (1.0 / ensaio["dt"]
+                               if np.isfinite(ensaio["dt"]) and ensaio["dt"] > 0
+                               else np.nan),
         "raio_mm": ensaio["raio"],
         "centro_x_mm": ensaio["centro"][0],
         "centro_y_mm": ensaio["centro"][1],
@@ -690,7 +764,10 @@ def grade_comum(grupo):
     tau_max = min(float(e["tau"][-1]) for e in grupo)
     if tau_max <= tau_min:
         return np.empty(0), np.empty((0, 0))
-    grade = np.arange(tau_min, tau_max, float(np.median([e["dt"] for e in grupo])))
+    passo_grade = float(np.median([e["dt"] for e in grupo]))
+    if not np.isfinite(passo_grade) or passo_grade <= 0:
+        return np.empty(0), np.empty((0, 0))
+    grade = np.arange(tau_min, tau_max, passo_grade)
     return grade, np.column_stack(
         [np.interp(grade, e["tau"], e["theta_rel"]) for e in grupo])
 
@@ -734,6 +811,25 @@ def texto_acomodacao(grupo, por_degrau):
             + "\n".join(linhas))
 
 
+def plot_xy_solo(grupo):
+    """Trajetoria medida, sem a curva desejada (equivale a GRAFICO SOLO)."""
+    ref = grupo[0]
+    fig, eixo = plt.subplots(figsize=FIG_TAMANHO)
+    for ensaio in grupo:
+        eixo.plot(ensaio["x"] - ensaio["centro"][0],
+                  ensaio["y"] - ensaio["centro"][1],
+                  label=f"Experimento {ensaio['repeticao']}")
+    eixo.plot(0, 0, "k+", markersize=9)
+    eixo.set_xlabel("X (mm) — origem na junta")
+    eixo.set_ylabel("Y (mm) — origem na junta")
+    eixo.set_title(f"{ref['prototipo']} — {ref['categoria']} (X vs Y)")
+    eixo.legend(loc="best")
+    eixo.set_aspect("equal", adjustable="datalim")
+    fig.tight_layout()
+    salvar_figura_traj(fig, "GRAFICO SOLO",
+                       f"grafico_{ref['prototipo']}_{ref['categoria']}_XY")
+
+
 def plot_xy(grupo, por_degrau):
     """Trajetoria no plano, no referencial da junta, com o arco desejado."""
     ref = grupo[0]
@@ -756,7 +852,7 @@ def plot_xy(grupo, por_degrau):
     eixo.legend(loc="upper right")
     eixo.set_aspect("equal", adjustable="datalim")
     fig.tight_layout()
-    salvar_figura_traj(fig, "TRAJETORIA_XY", f"xy_{ref['prototipo']}_{ref['categoria']}")
+    salvar_figura_traj(fig, "GRAFICOS COMBINADO", f"grafico_combinado_{ref['prototipo']}_{ref['categoria']}")
 
 
 def plot_angulo(grupo, por_degrau, zoom=None):
@@ -806,7 +902,7 @@ def plot_angulo(grupo, por_degrau, zoom=None):
     eixo.legend(loc="upper left")
     fig.tight_layout()
     nome = ("angulo_zoom_" if zoom else "angulo_") + f"{ref['prototipo']}_{ref['categoria']}"
-    salvar_figura_traj(fig, "ANGULO_ZOOM" if zoom else "ANGULO_TEMPO", nome)
+    salvar_figura_traj(fig, "GRAFICO DE ANGULOS COM ZOOM" if zoom else "GRAFICO ANGULOS COMBINADOS", nome)
 
 
 def plot_media(grupo, por_degrau):
@@ -835,7 +931,7 @@ def plot_media(grupo, por_degrau):
     inf.set_xlabel("Tempo desde o comando (s)")
     inf.set_ylabel("Erro (graus)")
     fig.tight_layout()
-    salvar_figura_traj(fig, "MEDIA_DESVIO", f"media_{ref['prototipo']}_{ref['categoria']}")
+    salvar_figura_traj(fig, "MEDIA E DESVIO", f"media_{ref['prototipo']}_{ref['categoria']}")
 
 
 def plot_acomodacao(grupo, por_degrau):
@@ -864,7 +960,7 @@ def plot_acomodacao(grupo, por_degrau):
                    f"(±{100*BANDA_ACOMODACAO:.0f}% {BANDA_MODO})")
     eixo.legend(loc="best")
     fig.tight_layout()
-    salvar_figura_traj(fig, "TEMPO_ACOMODACAO", f"acomodacao_{ref['prototipo']}_{ref['categoria']}")
+    salvar_figura_traj(fig, "TEMPO DE ACOMODACAO", f"acomodacao_{ref['prototipo']}_{ref['categoria']}")
 
 
 def plot_comparacao_prototipos(resumo):
@@ -891,18 +987,18 @@ def plot_comparacao_prototipos(resumo):
     eixo.set_title("Comparação entre protótipos (±5% do passo)")
     eixo.legend(loc="best")
     fig.tight_layout()
-    salvar_figura_traj(fig, "TEMPO_ACOMODACAO", "comparacao_prototipos_acomodacao")
+    salvar_figura_traj(fig, "TEMPO DE ACOMODACAO", "comparacao_prototipos_acomodacao")
 
 
 # ---------------------------------------------------------------------
 # PARTE 7 - EXECUCAO
 # ---------------------------------------------------------------------
 def executar_trajetoria(cliente=None):
-    if cliente is None and EM_COLAB:
+    if cliente is None and EM_COLAB and not ARQUIVOS_XLSX:
         cliente = autenticar()
 
     print("PARTE 1/5 - Leitura das planilhas")
-    ensaios = carregar_ensaios(cliente)
+    ensaios = carregar_de_xlsx() if ARQUIVOS_XLSX else carregar_ensaios(cliente)
     print(f"  {len(ensaios)} ensaios carregados")
 
     print("PARTE 2/5 - Geometria, ângulo e alinhamento")
@@ -929,18 +1025,32 @@ def executar_trajetoria(cliente=None):
                   f"O tempo de acomodação desta categoria NÃO é confiável — "
                   f"reexporte do Tracker com mais casas decimais.")
 
+    def ganho(bloco):
+        """Inclinacao de valor_final x alvo_comandado: o que o servo entrega."""
+        valido = bloco[["alvo_comandado_graus", "valor_final_graus"]].dropna()
+        if len(valido) < 3:
+            return np.nan
+        return float(np.polyfit(valido["alvo_comandado_graus"],
+                                valido["valor_final_graus"], 1)[0])
+
     resumo = pd.DataFrame()
     if not por_degrau.empty:
         resumo = (por_degrau.groupby(["prototipo", "categoria"])
-                  .agg(erro_medio_graus=("erro_graus", "mean"),
-                       erro_desvio_graus=("erro_graus", "std"),
+                  .agg(erro_regime_medio_graus=("erro_regime_graus", "mean"),
+                       erro_regime_desvio_graus=("erro_regime_graus", "std"),
                        t_acomodacao_medio_s=("tempo_acomodacao_s", "mean"),
                        t_acomodacao_desvio_s=("tempo_acomodacao_s", "std"),
                        t_acomodacao_max_s=("tempo_acomodacao_s", "max"),
                        tempo_subida_medio_s=("tempo_subida_s", "mean"),
                        sobressinal_medio_pct=("sobressinal_pct", "mean"),
-                       degraus=("degrau", "count"))
+                       degraus_avaliados=("degrau", "count"),
+                       degraus_sem_acomodar=("tempo_acomodacao_s",
+                                             lambda s: int(s.isna().sum())))
                   .reset_index())
+        ganhos = (por_degrau.groupby(["prototipo", "categoria"])
+                  .apply(ganho, include_groups=False)
+                  .rename("ganho_servo").reset_index())
+        resumo = resumo.merge(ganhos, on=["prototipo", "categoria"], how="left")
 
     print("PARTE 4/5 - Gráficos")
     grupos = {}
@@ -950,6 +1060,7 @@ def executar_trajetoria(cliente=None):
         grupo = sorted(grupos[chave], key=lambda e: e["repeticao"])
         print(f"  {chave[0]} / {chave[1]}")
         verificar_cadencia(grupo)
+        plot_xy_solo(grupo)
         plot_xy(grupo, por_degrau)
         plot_angulo(grupo, por_degrau)
         plot_angulo(grupo, por_degrau, zoom=ZOOM_SEGUNDOS)
