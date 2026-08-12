@@ -164,6 +164,52 @@ def resumir(tabela):
             .reset_index())
 
 
+def _num(valor, casas):
+    """Numero em formato pt-BR (virgula decimal), pronto para o texto."""
+    if not np.isfinite(valor):
+        return "—"
+    return f"{valor:.{casas}f}".replace(".", ",")
+
+
+def tabela_para_o_texto(tabela, repet):
+    """Tabela pronta para colar no artigo, com theta1 e theta2.
+
+    Uma linha por posicao comandada. O atuador 1 tem UMA leitura por
+    alvo (o angulo e o mesmo em todo o bloco), entao nao ha desvio; o
+    atuador 2 e visitado 5 vezes, uma por configuracao do atuador 1, e
+    o desvio entre essas leituras vai entre parenteses. A ultima linha
+    traz o erro absoluto medio de cada coluna.
+    """
+    nomes = list(PROTOTIPOS)
+    colunas = ["Alvo [°]"]
+    for nome in nomes:
+        colunas += [f"Atuador 1 – {nome} [°]", f"Atuador 2 – {nome} [°] (dp)"]
+
+    linhas = []
+    for alvo in ALVOS:
+        linha = {"Alvo [°]": _num(alvo, 0)}
+        for nome in nomes:
+            bloco = tabela[(tabela["prototipo"] == nome)
+                           & (tabela["theta1_alvo"] == alvo)]
+            medido1 = float(bloco["theta1_medido"].iloc[0])
+            leitura = repet[(repet["prototipo"] == nome)
+                            & (repet["theta2_alvo"] == alvo)].iloc[0]
+            linha[f"Atuador 1 – {nome} [°]"] = _num(medido1, 1)
+            linha[f"Atuador 2 – {nome} [°] (dp)"] = (
+                f"{_num(leitura['theta2_medio'], 2)} "
+                f"({_num(leitura['theta2_desvio'], 2)})")
+        linhas.append(linha)
+
+    rodape = {"Alvo [°]": "|erro| médio"}
+    for nome in nomes:
+        bloco = tabela[tabela["prototipo"] == nome]
+        rodape[f"Atuador 1 – {nome} [°]"] = _num(bloco["erro_theta1"].abs().mean(), 2)
+        rodape[f"Atuador 2 – {nome} [°] (dp)"] = _num(bloco["erro_theta2"].abs().mean(), 2)
+    linhas.append(rodape)
+
+    return pd.DataFrame(linhas, columns=colunas)
+
+
 def salvar_figura_mapa(fig, nome, tentativas=3):
     """Salva a figura tolerando falha transitoria do Drive montado."""
     for formato in FORMATOS:
@@ -272,7 +318,13 @@ def executar_mapa_angular():
     repet = repetibilidade(tabela)
     resumo = resumir(tabela)
 
-    print("=== RESUMO POR PROTOTIPO ===")
+    tabela_texto = tabela_para_o_texto(tabela, repet)
+    print("=== TABELA PARA O TEXTO ===")
+    print(tabela_texto.to_string(index=False))
+    print("  (dp) = desvio padrao entre as 5 leituras do atuador 2 em cada alvo;"
+          "\n  o atuador 1 tem uma unica leitura por alvo, entao nao tem desvio.")
+
+    print("\n=== RESUMO POR PROTOTIPO ===")
     print(resumo.round(2).to_string(index=False))
 
     print("\n=== REPETIBILIDADE DO ATUADOR 2 (5 leituras por alvo) ===")
@@ -297,15 +349,16 @@ def executar_mapa_angular():
     conferir_comprimentos()
 
     os.makedirs(PASTA_SAIDA, exist_ok=True)
-    for nome_arq, dados in (("mapa_angular_pontos", tabela),
+    for nome_arq, dados in (("mapa_angular_TABELA_ARTIGO", tabela_texto),
+                            ("mapa_angular_pontos", tabela),
                             ("mapa_angular_repetibilidade", repet),
                             ("mapa_angular_ganho_offset", ganhos),
                             ("mapa_angular_resumo", resumo)):
         dados.to_csv(os.path.join(PASTA_SAIDA, f"{nome_arq}.csv"),
                      index=False, sep=";", decimal=",")
     print(f"\nConcluído. Resultados em {PASTA_SAIDA}")
-    return {"pontos": tabela, "repetibilidade": repet,
-            "ganho_offset": ganhos, "resumo": resumo}
+    return {"tabela_artigo": tabela_texto, "pontos": tabela,
+            "repetibilidade": repet, "ganho_offset": ganhos, "resumo": resumo}
 
 
 if __name__ == "__main__":

@@ -29,32 +29,26 @@ DADOS = {
     ("PE01", "com gravidade"): {
         "ENG 1": [19.593, 34.305, 30.590, 41.674, 46.414],
         "ENG 2": [39.035, 26.362, 32.050, 34.209, 34.339],
-        "POT 1": [61.961, 115.390, 74.867, 109.560, 160.120],
-        "POT 2": [124.040, 95.886, 17.024, 71.411, 99.586],
     },
     ("PE01", "sem gravidade"): {
         "ENG 1": [18.705, 24.235, 20.665, 21.556, 33.037],
         "ENG 2": [20.664, 25.456, 31.147, 37.697, 28.234],
-        "POT 1": [59.017, 110.560, 71.225, 105.530, 159.450],
-        "POT 2": [89.519, 71.908, 23.485, 91.556, 143.450],
     },
     ("PE02", "com gravidade"): {
         "ENG 1": [21.335, 21.435, 28.325, 28.277, 38.338],
         "ENG 2": [33.003, 28.083, 31.020, 34.671, 34.031],
-        "POT 1": [36.400, 25.670, 35.133, 33.606, 21.692],
-        "POT 2": [121.240, 36.767, 114.550, 97.281, 145.230],
     },
     ("PE02", "sem gravidade"): {
         "ENG 1": [20.620, 20.714, 27.261, 26.865, 36.095],
         "ENG 2": [31.449, 27.110, 29.392, 32.622, 32.093],
-        "POT 1": [33.319, 26.164, 30.679, 35.443, 20.943],
-        "POT 2": [117.700, 31.508, 112.830, 89.020, 116.010],
     },
 }
 
-CORES = {"ENG 1": "#1f4e9c", "ENG 2": "#3fa7d6",
-         "POT 1": "#2e7d32", "POT 2": "#c77d00"}
-MARCAS = {"ENG 1": "o", "ENG 2": "s", "POT 1": "^", "POT 2": "D"}
+# Apenas os pontos do engaste. As series do potenciometro foram
+# removidas da analise por decisao do autor; os valores seguem no
+# historico do repositorio caso precisem voltar.
+CORES = {"ENG 1": "#1f4e9c", "ENG 2": "#3fa7d6"}
+MARCAS = {"ENG 1": "o", "ENG 2": "s"}
 
 PASTA_SAIDA = "/content/drive/MyDrive/CTG_UFPE/PROJETOS/PROJ 1/RESULTADOS"
 FORMATOS = ("png", "pdf")
@@ -198,7 +192,7 @@ def figura_convergencia(convergencia):
         eixo.set_title(MODELOS[modelo])
         eixo.tick_params(axis="x", rotation=30)
     eixos[0].set_ylabel("Variação da tensão (%)")
-    eixos[-1].legend(loc="best", ncol=2)
+    eixos[-1].legend(loc="best")
     fig.tight_layout()
     salvar_figura_malha(fig, "malha_convergencia")
 
