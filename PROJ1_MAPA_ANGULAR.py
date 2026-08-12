@@ -10,6 +10,7 @@
 # erro cartesiano sai da distancia ate o alvo.
 # =====================================================================
 import os
+import time
 
 import numpy as np
 import pandas as pd
@@ -163,10 +164,21 @@ def resumir(tabela):
             .reset_index())
 
 
-def salvar_figura_mapa(fig, nome):
-    os.makedirs(PASTA_SAIDA, exist_ok=True)
+def salvar_figura_mapa(fig, nome, tentativas=3):
+    """Salva a figura tolerando falha transitoria do Drive montado."""
     for formato in FORMATOS:
-        fig.savefig(os.path.join(PASTA_SAIDA, f"{nome}.{formato}"), format=formato)
+        caminho = os.path.join(PASTA_SAIDA, f"{nome}.{formato}")
+        for tentativa in range(1, tentativas + 1):
+            try:
+                os.makedirs(PASTA_SAIDA, exist_ok=True)
+                fig.savefig(caminho, format=formato)
+                break
+            except OSError as erro:
+                if tentativa == tentativas:
+                    print(f"  ! nao foi possivel salvar {os.path.basename(caminho)}"
+                          f" ({type(erro).__name__}); seguindo adiante")
+                else:
+                    time.sleep(1.0)
     if MOSTRAR_FIGURAS:
         plt.show()
     plt.close(fig)

@@ -51,6 +51,11 @@ PASTA_DRIVE = "/content/drive/MyDrive/CTG_UFPE/PROJETOS/PROJ 1"
 PASTA_RESULTADOS = os.path.join(PASTA_DRIVE, "RESULTADOS")
 PASTA_CACHE = os.path.join(PASTA_DRIVE, "CACHE_DADOS")
 USAR_CACHE = True          # 2a execucao nao chama a API do Sheets
+# Versao do formato do cache. Suba este numero sempre que a LEITURA
+# mudar: o cache antigo passa a ser ignorado em vez de servir dados
+# obsoletos. A v1 guardava valores formatados (3 algarismos), lidos
+# antes de a leitura passar a pedir UNFORMATTED_VALUE.
+VERSAO_CACHE = 2
 
 # --- Modelo do ensaio ------------------------------------------------
 PERIODO_DEGRAU_S = 1.0     # um degrau a cada 1 s (verificado nos dados)
@@ -258,7 +263,7 @@ def carregar_de_xlsx():
 
 
 def caminho_cache(prototipo, aba):
-    return os.path.join(PASTA_CACHE, f"{prototipo}__{aba}.csv")
+    return os.path.join(PASTA_CACHE, f"v{VERSAO_CACHE}__{prototipo}__{aba}.csv")
 
 
 def carregar_ensaios(cliente=None):
@@ -519,8 +524,12 @@ def preparar(ensaio):
               f"raio medido {raio:.1f} mm x nominal {esperado:.1f} mm")
     if np.isfinite(max_res) and max_res > 0.10 * abs(ensaio["passo"]):
         print(f"  ! {ensaio['prototipo']}/{ensaio['categoria']}_{ensaio['repeticao']}: "
-              f"dados com {digitos} algarismos significativos -> ate {max_res:.2f} "
-              f"graus so de quantizacao ({100*max_res/abs(ensaio['passo']):.0f}% do passo)")
+              f"dados com apenas {digitos} algarismos significativos -> ate "
+              f"{max_res:.2f} graus so de arredondamento "
+              f"({100*max_res/abs(ensaio['passo']):.0f}% do passo). "
+              f"As planilhas tem precisao total: isso indica leitura de "
+              f"valores FORMATADOS. Apague a pasta {os.path.basename(PASTA_CACHE)} "
+              f"e rode de novo.")
     return ensaio
 
 
@@ -786,11 +795,28 @@ def grade_comum(grupo):
 # ---------------------------------------------------------------------
 # PARTE 6 - GRAFICOS
 # ---------------------------------------------------------------------
-def salvar_figura_traj(fig, subpasta, nome):
+def salvar_figura_traj(fig, subpasta, nome, tentativas=3):
+    """Salva a figura em cada formato, tolerando falha do Drive.
+
+    O Drive montado por FUSE falha de vez em quando ao criar arquivo,
+    sobretudo gravando dezenas deles em sequencia -- foi assim que uma
+    execucao inteira se perdeu depois de 5 minutos, num FileNotFoundError
+    de um unico PDF. Aqui a falha e reportada e a execucao continua.
+    """
     pasta = os.path.join(PASTA_RESULTADOS, subpasta)
-    os.makedirs(pasta, exist_ok=True)
     for formato in FORMATOS:
-        fig.savefig(os.path.join(pasta, f"{nome}.{formato}"), format=formato)
+        caminho = os.path.join(pasta, f"{nome}.{formato}")
+        for tentativa in range(1, tentativas + 1):
+            try:
+                os.makedirs(pasta, exist_ok=True)
+                fig.savefig(caminho, format=formato)
+                break
+            except OSError as erro:
+                if tentativa == tentativas:
+                    print(f"  ! nao foi possivel salvar {os.path.basename(caminho)}"
+                          f" ({type(erro).__name__}); seguindo adiante")
+                else:
+                    time.sleep(1.0)
     if MOSTRAR_FIGURAS:
         plt.show()
     plt.close(fig)
@@ -1018,8 +1044,10 @@ def executar_trajetoria(cliente=None):
             avisados.add(chave)
             print(f"  ! {chave[0]}/{chave[1]}: faixa de ±{banda:.2f}° é menor que a "
                   f"resolução dos dados (±{ensaio['resolucao_angular_max']:.2f}°). "
-                  f"O tempo de assentamento desta categoria NÃO é confiável — "
-                  f"reexporte do Tracker com mais casas decimais.")
+                  f"O tempo de assentamento desta categoria NÃO é confiável. "
+                  f"Se o aviso de algarismos significativos apareceu acima, "
+                  f"a causa é cache antigo — apague "
+                  f"{os.path.basename(PASTA_CACHE)} e rode de novo.")
 
     def ganho(bloco):
         """Inclinacao de valor_final x alvo_comandado: o que o servo entrega."""
