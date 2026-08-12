@@ -99,24 +99,37 @@ ELOS = {
 }
 
 # --- Figuras ---------------------------------------------------------
-FIG_TAMANHO = (7.0, 4.5)
+# No artigo as figuras entram lado a lado, ocupando ~metade da largura
+# do texto. Uma figura larga com fonte pequena encolhe demais e fica
+# ilegivel. A saida e gerar JA ESTREITA e com fonte grande: assim o
+# fator de reducao ate a pagina e pequeno.
+FIG_TAMANHO = (5.6, 4.2)   # polegadas
+ESCALA_FONTE = 1.55        # aumente se ainda ficar pequeno no artigo
 FIG_DPI = 300
 FORMATOS = ("png", "pdf")   # PDF e vetorial: e o que o CREEM aceita sem perda
-ZOOM_SEGUNDOS = 3.0
-MARGEM_PRE_COMANDO = 0.2
+ZOOM_SEGUNDOS = 1.5
+MARGEM_PRE_COMANDO = 0.15
 MOSTRAR_FIGURAS = True
+
+
+def _fonte(base):
+    """Tamanho de fonte ja escalado para a figura do artigo."""
+    return round(base * ESCALA_FONTE, 1)
+
+
+FONTE_CAIXA = _fonte(7.0)   # caixa do tempo de acomodacao
 
 matplotlib.rcParams.update({
     "figure.figsize": FIG_TAMANHO,
     "figure.dpi": 110,
     "savefig.dpi": FIG_DPI,
     "savefig.bbox": "tight",
-    "font.size": 11,
-    "axes.titlesize": 12,
-    "axes.labelsize": 11,
-    "legend.fontsize": 9,
-    "xtick.labelsize": 10,
-    "ytick.labelsize": 10,
+    "font.size": _fonte(11),
+    "axes.titlesize": _fonte(11),
+    "axes.labelsize": _fonte(11),
+    "legend.fontsize": _fonte(9.5),
+    "xtick.labelsize": _fonte(10),
+    "ytick.labelsize": _fonte(10),
     "axes.grid": True,
     "grid.linestyle": "--",
     "grid.linewidth": 0.4,
@@ -786,8 +799,13 @@ def salvar_figura_traj(fig, subpasta, nome):
 
 
 def texto_acomodacao(grupo, por_degrau):
-    """Caixa com o tempo de acomodacao de cada repeticao e a media."""
-    linhas, medias = [], []
+    """Caixa compacta com o tempo de acomodacao e a media.
+
+    Formato curto de proposito: a caixa fica DENTRO dos eixos, e com a
+    fonte ampliada para o artigo um texto longo tomaria metade da
+    figura.
+    """
+    valores, medias, sem_acomodar = [], [], 0
     for ensaio in grupo:
         meu = por_degrau[
             (por_degrau["prototipo"] == ensaio["prototipo"])
@@ -795,26 +813,27 @@ def texto_acomodacao(grupo, por_degrau):
             & (por_degrau["repeticao"] == ensaio["repeticao"])
         ]["tempo_acomodacao_s"]
         media = meu.mean()
-        nao_acomodou = int(meu.isna().sum())
+        sem_acomodar += int(meu.isna().sum())
         if np.isfinite(media):
             medias.append(media)
-            aviso = f"  ({nao_acomodou} degrau(s) sem acomodar)" if nao_acomodou else ""
-            linhas.append(f"Exp {ensaio['repeticao']}: {1000*media:5.0f} ms"
-                          f" ± {1000*meu.std():3.0f}{aviso}")
+            valores.append(f"{1000 * media:.0f}")
         else:
-            linhas.append(f"Exp {ensaio['repeticao']}: nao acomodou")
+            valores.append("--")
+
+    linhas = [f"$t_{{acom}}$ (±{100 * BANDA_ACOMODACAO:.0f}% do passo)",
+              "Exp: " + " / ".join(valores) + " ms"]
     if medias:
-        linhas.append(f"Média:  {1000*np.mean(medias):5.0f} ms"
-                      f" ± {1000*np.std(medias):3.0f}")
-    referencia = "do passo" if BANDA_MODO == "passo" else "do valor final"
-    return (f"Tempo de acomodação (±{100*BANDA_ACOMODACAO:.0f}% {referencia})\n"
-            + "\n".join(linhas))
+        linhas.append(f"Média: {1000 * np.mean(medias):.0f} "
+                      f"± {1000 * np.std(medias):.0f} ms")
+    if sem_acomodar:
+        linhas.append(f"({sem_acomodar} degrau(s) sem acomodar)")
+    return "\n".join(linhas)
 
 
 def plot_xy_solo(grupo):
     """Trajetoria medida, sem a curva desejada (equivale a GRAFICO SOLO)."""
     ref = grupo[0]
-    fig, eixo = plt.subplots(figsize=FIG_TAMANHO)
+    fig, eixo = plt.subplots(figsize=FIG_TAMANHO, layout="constrained")
     for ensaio in grupo:
         eixo.plot(ensaio["x"] - ensaio["centro"][0],
                   ensaio["y"] - ensaio["centro"][1],
@@ -825,7 +844,6 @@ def plot_xy_solo(grupo):
     eixo.set_title(f"{ref['prototipo']} — {ref['categoria']} (X vs Y)")
     eixo.legend(loc="best")
     eixo.set_aspect("equal", adjustable="datalim")
-    fig.tight_layout()
     salvar_figura_traj(fig, "GRAFICO SOLO",
                        f"grafico_{ref['prototipo']}_{ref['categoria']}_XY")
 
@@ -833,7 +851,7 @@ def plot_xy_solo(grupo):
 def plot_xy(grupo, por_degrau):
     """Trajetoria no plano, no referencial da junta, com o arco desejado."""
     ref = grupo[0]
-    fig, eixo = plt.subplots(figsize=FIG_TAMANHO)
+    fig, eixo = plt.subplots(figsize=FIG_TAMANHO, layout="constrained")
     for ensaio in grupo:
         eixo.plot(ensaio["x"] - ensaio["centro"][0],
                   ensaio["y"] - ensaio["centro"][1],
@@ -843,22 +861,21 @@ def plot_xy(grupo, por_degrau):
               "k--", linewidth=1.8, label="Trajetória desejada")
     eixo.plot(0, 0, "k+", markersize=9)
     eixo.text(0.02, 0.02, texto_acomodacao(grupo, por_degrau),
-              transform=eixo.transAxes, fontsize=7.5, va="bottom", ha="left",
-              family="monospace",
+              transform=eixo.transAxes, fontsize=FONTE_CAIXA,
+              va="bottom", ha="left", linespacing=1.35,
               bbox=dict(boxstyle="round", facecolor="white", alpha=0.85, lw=0.5))
     eixo.set_xlabel("X (mm) — origem na junta")
     eixo.set_ylabel("Y (mm) — origem na junta")
     eixo.set_title(f"{ref['prototipo']} — {ref['categoria']}")
     eixo.legend(loc="upper right")
     eixo.set_aspect("equal", adjustable="datalim")
-    fig.tight_layout()
     salvar_figura_traj(fig, "GRAFICOS COMBINADO", f"grafico_combinado_{ref['prototipo']}_{ref['categoria']}")
 
 
 def plot_angulo(grupo, por_degrau, zoom=None):
     """Angulo x tempo desde o comando, com a escada e o t. de acomodacao."""
     ref = grupo[0]
-    fig, eixo = plt.subplots(figsize=FIG_TAMANHO)
+    fig, eixo = plt.subplots(figsize=FIG_TAMANHO, layout="constrained")
     limite = zoom if zoom else max(float(e["tau"][-1]) for e in grupo)
 
     medidos = []
@@ -885,22 +902,25 @@ def plot_angulo(grupo, por_degrau, zoom=None):
                           color="0.6", alpha=0.25, linewidth=0,
                           label=rotulo_faixa if k == 0 else None)
 
+    # Limita o eixo aos dados medidos e ainda reserva espaco no topo: a
+    # legenda fica dentro dos eixos e, sem essa folga, cobriria o
+    # primeiro patamar da escada -- justamente onde se le a acomodacao.
     juntos = np.concatenate(medidos) if medidos else np.empty(0)
     if juntos.size:
         menor, maior = float(np.min(juntos)), float(np.max(juntos))
-        folga = 0.08 * max(maior - menor, passo)
-        eixo.set_ylim(menor - folga, maior + folga)
+        amplitude = max(maior - menor, passo)
+        eixo.set_ylim(menor - 0.08 * amplitude, maior + 0.55 * amplitude)
 
     eixo.text(0.98, 0.02, texto_acomodacao(grupo, por_degrau),
-              transform=eixo.transAxes, fontsize=7.5, va="bottom", ha="right",
-              family="monospace",
+              transform=eixo.transAxes, fontsize=FONTE_CAIXA,
+              va="bottom", ha="right", linespacing=1.35,
               bbox=dict(boxstyle="round", facecolor="white", alpha=0.85, lw=0.5))
     eixo.set_xlabel("Tempo desde o comando (s)")
     eixo.set_ylabel("Deslocamento angular (graus)")
     sufixo = f" — zoom 0–{limite:g} s" if zoom else ""
     eixo.set_title(f"{ref['prototipo']} — {ref['categoria']}{sufixo}")
-    eixo.legend(loc="upper left")
-    fig.tight_layout()
+    eixo.legend(loc="upper left", ncol=2, handlelength=1.4,
+                columnspacing=1.0, borderpad=0.4, labelspacing=0.3)
     nome = ("angulo_zoom_" if zoom else "angulo_") + f"{ref['prototipo']}_{ref['categoria']}"
     salvar_figura_traj(fig, "GRAFICO DE ANGULOS COM ZOOM" if zoom else "GRAFICO ANGULOS COMBINADOS", nome)
 
@@ -917,8 +937,9 @@ def plot_media(grupo, por_degrau):
     comando = trajetoria_desejada(grade, ref["passo"])
 
     fig, (sup, inf) = plt.subplots(
-        2, 1, figsize=(FIG_TAMANHO[0], FIG_TAMANHO[1] * 1.35),
-        sharex=True, gridspec_kw={"height_ratios": [2.2, 1.0]})
+        2, 1, figsize=(FIG_TAMANHO[0], FIG_TAMANHO[1] * 1.45),
+        sharex=True, gridspec_kw={"height_ratios": [2.2, 1.0]},
+        layout="constrained")
     sup.plot(grade, media, label=f"Média de {matriz.shape[1]} ensaios")
     sup.fill_between(grade, media - desvio, media + desvio, alpha=0.30,
                      label="± 1 desvio padrão")
@@ -930,14 +951,13 @@ def plot_media(grupo, por_degrau):
     inf.axhline(0.0, color="k", linewidth=0.8)
     inf.set_xlabel("Tempo desde o comando (s)")
     inf.set_ylabel("Erro (graus)")
-    fig.tight_layout()
     salvar_figura_traj(fig, "MEDIA E DESVIO", f"media_{ref['prototipo']}_{ref['categoria']}")
 
 
 def plot_acomodacao(grupo, por_degrau):
     """Tempo de acomodacao degrau a degrau, por repeticao."""
     ref = grupo[0]
-    fig, eixo = plt.subplots(figsize=FIG_TAMANHO)
+    fig, eixo = plt.subplots(figsize=FIG_TAMANHO, layout="constrained")
     todos = []
     for ensaio in grupo:
         meu = por_degrau[
@@ -959,7 +979,6 @@ def plot_acomodacao(grupo, por_degrau):
     eixo.set_title(f"{ref['prototipo']} — {ref['categoria']} "
                    f"(±{100*BANDA_ACOMODACAO:.0f}% {BANDA_MODO})")
     eixo.legend(loc="best")
-    fig.tight_layout()
     salvar_figura_traj(fig, "TEMPO DE ACOMODACAO", f"acomodacao_{ref['prototipo']}_{ref['categoria']}")
 
 
@@ -974,7 +993,7 @@ def plot_comparacao_prototipos(resumo):
     erros = resumo.pivot_table(index="categoria", columns="prototipo",
                                values="t_acomodacao_desvio_s", aggfunc="mean")
     erros = erros.reindex(index=tabela.index, columns=tabela.columns).fillna(0.0)
-    fig, eixo = plt.subplots(figsize=(FIG_TAMANHO[0], FIG_TAMANHO[1]))
+    fig, eixo = plt.subplots(figsize=FIG_TAMANHO, layout="constrained")
     posicoes = np.arange(len(tabela.index))
     largura = 0.8 / max(len(tabela.columns), 1)
     for i, coluna in enumerate(tabela.columns):
@@ -986,7 +1005,6 @@ def plot_comparacao_prototipos(resumo):
     eixo.set_ylabel("Tempo de acomodação médio (ms)")
     eixo.set_title("Comparação entre protótipos (±5% do passo)")
     eixo.legend(loc="best")
-    fig.tight_layout()
     salvar_figura_traj(fig, "TEMPO DE ACOMODACAO", "comparacao_prototipos_acomodacao")
 
 
