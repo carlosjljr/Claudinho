@@ -22,7 +22,9 @@ MODELOS = {
 }
 
 ELEMENTOS = np.array([0.2, 0.4, 0.8, 1.0, 1.5])   # milhoes de elementos
-FAIXA_ADOTADA = (0.7, 0.9)                        # malha escolhida
+# Malha escolhida. Nao e mais desenhada na figura; segue em uso para
+# preencher a coluna tensao_malha_adotada_MPa da tabela.
+FAIXA_ADOTADA = (0.7, 0.9)
 LIMITE_CONVERGENCIA = 5.0                         # % de variacao aceita
 
 DADOS = {
@@ -131,7 +133,6 @@ def figura_malha():
     eixos = np.atleast_1d(eixos)
 
     for eixo, (modelo, titulo) in zip(eixos, MODELOS.items()):
-        eixo.axvspan(*FAIXA_ADOTADA, color="0.88", zorder=0)
         for ponto in CORES:
             eixo.plot(ELEMENTOS, DADOS[(modelo, "com gravidade")][ponto],
                       MARCAS[ponto] + "-", color=CORES[ponto], ms=4.5, lw=1.4,
@@ -145,25 +146,11 @@ def figura_malha():
         eixo.set_title(titulo)
     eixos[0].set_ylabel("Tensão equivalente de von Mises [MPa]")
 
-    # Marca os pontos que nao convergiram: sem isso a figura sugere que
-    # a malha adotada vale para todos os pontos, o que nao e o caso.
-    convergencia = tabela_convergencia()
-    for eixo, modelo in zip(eixos, MODELOS):
-        falhos = convergencia[(convergencia["modelo"] == modelo)
-                              & (convergencia["condicao"] == "com gravidade")
-                              & (~convergencia["convergido"])]["ponto"].tolist()
-        if falhos:
-            eixo.text(0.02, 0.97, "não convergiu: " + ", ".join(falhos),
-                      transform=eixo.transAxes, fontsize=7.5, va="top",
-                      bbox=dict(boxstyle="round", facecolor="#ffe9e9",
-                                edgecolor="#c00", alpha=0.9, lw=0.6))
-
     marcadores = [plt.Line2D([], [], color=CORES[p], marker=MARCAS[p],
                              linestyle="-", ms=4.5, label=p) for p in CORES]
     marcadores += [
         plt.Line2D([], [], color="0.35", linestyle="-", label="com gravidade"),
         plt.Line2D([], [], color="0.35", linestyle="--", label="sem gravidade"),
-        plt.Rectangle((0, 0), 1, 1, color="0.88", label="malha adotada"),
     ]
     fig.legend(handles=marcadores, loc="lower center", ncol=4, frameon=False,
                bbox_to_anchor=(0.5, -0.14))
