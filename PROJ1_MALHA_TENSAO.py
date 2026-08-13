@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
 # =====================================================================
-# PROJ 1 - CONVERGENCIA DE MALHA: von Mises nos pontos de prova
+# PROJ 1 - CONVERGENCIA DE MALHA: Von Mises nos pontos de prova
 # =====================================================================
 # Cole numa celula do Colab e rode. Nao depende dos outros modulos.
 #
-# Solido = com gravidade; tracejado = sem gravidade.
-# Alem da figura, roda a analise de convergencia: um estudo de malha so
-# justifica a malha adotada se a tensao PARAR de mudar com o refino.
+# Um unico grafico com os dois modelos. Tres canais visuais, um por
+# fator, porque sao 8 series (2 modelos x 2 servos x 2 condicoes):
+#   cor       -> servo   (Servo 1 preto, Servo 2 cinza)
+#   traco     -> gravidade (sem = continuo, com = tracejado)
+#   marcador  -> modelo  (MEE03 circulo, MEE10 quadrado)
 # =====================================================================
 import os
 import time
@@ -15,62 +17,69 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-# Modelos de elementos finitos, na mesma nomenclatura dos protótipos.
-MODELOS = {
-    "PE01": "(a) PE01 — modelo simplificado",
-    "PE02": "(b) PE02 — configuração final",
-}
+MODELOS = ("MEE03", "MEE10")
 
 ELEMENTOS = np.array([0.2, 0.4, 0.8, 1.0, 1.5])   # milhoes de elementos
-# Malha escolhida. Nao e mais desenhada na figura; segue em uso para
+# Malha escolhida. Nao e desenhada na figura; segue em uso para
 # preencher a coluna tensao_malha_adotada_MPa da tabela.
 FAIXA_ADOTADA = (0.7, 0.9)
 LIMITE_CONVERGENCIA = 5.0                         # % de variacao aceita
 
+# ATENCAO: as series antes se chamavam ENG 1 e ENG 2 (pontos de
+# engaste). Foram renomeadas para Servo 1 e Servo 2 conforme pedido --
+# confira se a correspondencia esta correta antes de publicar.
 DADOS = {
-    ("PE01", "com gravidade"): {
-        "ENG 1": [19.593, 34.305, 30.590, 41.674, 46.414],
-        "ENG 2": [39.035, 26.362, 32.050, 34.209, 34.339],
+    ("MEE03", "com gravidade"): {
+        "Servo 1": [19.593, 34.305, 30.590, 41.674, 46.414],
+        "Servo 2": [39.035, 26.362, 32.050, 34.209, 34.339],
     },
-    ("PE01", "sem gravidade"): {
-        "ENG 1": [18.705, 24.235, 20.665, 21.556, 33.037],
-        "ENG 2": [20.664, 25.456, 31.147, 37.697, 28.234],
+    ("MEE03", "sem gravidade"): {
+        "Servo 1": [18.705, 24.235, 20.665, 21.556, 33.037],
+        "Servo 2": [20.664, 25.456, 31.147, 37.697, 28.234],
     },
-    ("PE02", "com gravidade"): {
-        "ENG 1": [21.335, 21.435, 28.325, 28.277, 38.338],
-        "ENG 2": [33.003, 28.083, 31.020, 34.671, 34.031],
+    ("MEE10", "com gravidade"): {
+        "Servo 1": [21.335, 21.435, 28.325, 28.277, 38.338],
+        "Servo 2": [33.003, 28.083, 31.020, 34.671, 34.031],
     },
-    ("PE02", "sem gravidade"): {
-        "ENG 1": [20.620, 20.714, 27.261, 26.865, 36.095],
-        "ENG 2": [31.449, 27.110, 29.392, 32.622, 32.093],
+    ("MEE10", "sem gravidade"): {
+        "Servo 1": [20.620, 20.714, 27.261, 26.865, 36.095],
+        "Servo 2": [31.449, 27.110, 29.392, 32.622, 32.093],
     },
 }
 
-# Apenas os pontos do engaste. As series do potenciometro foram
-# removidas da analise por decisao do autor; os valores seguem no
-# historico do repositorio caso precisem voltar.
-CORES = {"ENG 1": "#1f4e9c", "ENG 2": "#3fa7d6"}
-MARCAS = {"ENG 1": "o", "ENG 2": "s"}
+# --- Codificacao visual ----------------------------------------------
+# Troque "0.45" por "tab:red" se preferir o vermelho ao cinza.
+CORES = {"Servo 1": "#000000", "Servo 2": "0.45"}
+ESTILO_GRAVIDADE = {"sem gravidade": "-", "com gravidade": "--"}
+MARCAS = {"MEE03": "o", "MEE10": "s"}
 
 PASTA_SAIDA = "/content/drive/MyDrive/CTG_UFPE/PROJETOS/PROJ 1/RESULTADOS"
 FORMATOS = ("png", "pdf")
+FIG_TAMANHO = (7.5, 5.0)
 MOSTRAR_FIGURAS = True
+
+# Fontes. O rotulo do eixo Y ja estava grande o bastante, entao ficou
+# menor que os demais de proposito.
+FONTE_EIXO_Y = 14
+FONTE_EIXO_X = 17
+FONTE_MARCAS = 15
+FONTE_LEGENDA = 15
 
 plt.rcParams.update({
     "figure.dpi": 110, "savefig.dpi": 300, "savefig.bbox": "tight",
-    "font.size": 11, "axes.titlesize": 11, "axes.labelsize": 11,
-    "legend.fontsize": 9, "xtick.labelsize": 10, "ytick.labelsize": 10,
+    "font.size": FONTE_MARCAS,
+    "axes.titlesize": FONTE_EIXO_X,
+    "axes.labelsize": FONTE_EIXO_X,
+    "legend.fontsize": FONTE_LEGENDA,
+    "xtick.labelsize": FONTE_MARCAS,
+    "ytick.labelsize": FONTE_MARCAS,
     "axes.grid": True, "grid.linestyle": "--", "grid.linewidth": 0.4,
     "grid.alpha": 0.6,
 })
 
 
 def garantir_drive_malha():
-    """Monta o Drive se estiver no Colab e ainda nao estiver montado.
-
-    Assim a ordem das celulas nao importa: este modulo pode rodar antes
-    ou depois do de trajetoria.
-    """
+    """Monta o Drive se estiver no Colab e ainda nao estiver montado."""
     if not PASTA_SAIDA.startswith("/content/drive"):
         return
     try:
@@ -88,14 +97,14 @@ def tabela_convergencia():
     as duas malhas mais finas ficar abaixo de LIMITE_CONVERGENCIA.
     """
     linhas = []
-    for (modelo, condicao), pontos in DADOS.items():
-        for ponto, valores in pontos.items():
+    for (modelo, condicao), series in DADOS.items():
+        for serie_nome, valores in series.items():
             serie = np.asarray(valores, float)
             variacao = 100.0 * np.abs(np.diff(serie)) / np.abs(serie[:-1])
             linhas.append({
                 "modelo": modelo,
                 "condicao": condicao,
-                "ponto": ponto,
+                "serie": serie_nome,
                 "tensao_malha_adotada_MPa": float(
                     serie[int(np.argmin(np.abs(ELEMENTOS - np.mean(FAIXA_ADOTADA))))]),
                 "tensao_malha_fina_MPa": float(serie[-1]),
@@ -129,58 +138,68 @@ def salvar_figura_malha(fig, nome, tentativas=3):
 
 
 def figura_malha():
-    fig, eixos = plt.subplots(1, len(MODELOS), figsize=(11.0, 4.4), sharey=True)
-    eixos = np.atleast_1d(eixos)
+    """Os dois modelos num unico grafico."""
+    fig, eixo = plt.subplots(figsize=FIG_TAMANHO, layout="constrained")
 
-    for eixo, (modelo, titulo) in zip(eixos, MODELOS.items()):
-        for ponto in CORES:
-            eixo.plot(ELEMENTOS, DADOS[(modelo, "com gravidade")][ponto],
-                      MARCAS[ponto] + "-", color=CORES[ponto], ms=4.5, lw=1.4,
-                      label=ponto)
-            eixo.plot(ELEMENTOS, DADOS[(modelo, "sem gravidade")][ponto],
-                      MARCAS[ponto] + "--", color=CORES[ponto], ms=3.5, lw=1.0,
-                      alpha=0.75)
-        eixo.set_xticks(ELEMENTOS)
-        eixo.set_xticklabels([f"{v:.1f}" for v in ELEMENTOS])
-        eixo.set_xlabel("Número de elementos [$\\times 10^6$]")
-        eixo.set_title(titulo)
-    eixos[0].set_ylabel("Tensão equivalente de von Mises [MPa]")
+    for modelo in MODELOS:
+        for condicao, traco in ESTILO_GRAVIDADE.items():
+            for serie_nome, cor in CORES.items():
+                eixo.plot(ELEMENTOS, DADOS[(modelo, condicao)][serie_nome],
+                          marker=MARCAS[modelo], linestyle=traco, color=cor,
+                          ms=6, lw=1.5, markerfacecolor="none", markeredgewidth=1.4)
 
-    marcadores = [plt.Line2D([], [], color=CORES[p], marker=MARCAS[p],
-                             linestyle="-", ms=4.5, label=p) for p in CORES]
-    marcadores += [
-        plt.Line2D([], [], color="0.35", linestyle="-", label="com gravidade"),
-        plt.Line2D([], [], color="0.35", linestyle="--", label="sem gravidade"),
-    ]
-    fig.legend(handles=marcadores, loc="lower center", ncol=4, frameon=False,
-               bbox_to_anchor=(0.5, -0.14))
-    fig.tight_layout()
+    eixo.set_xticks(ELEMENTOS)
+    eixo.set_xticklabels([f"{v:.1f}" for v in ELEMENTOS])
+    eixo.set_xlabel("Número de elementos [$\\times 10^6$]", fontsize=FONTE_EIXO_X)
+    eixo.set_ylabel("Tensão equivalente de Von Mises [MPa]", fontsize=FONTE_EIXO_Y)
+
+    # Legenda em tres blocos, um por canal visual: 6 entradas explicam
+    # as 8 curvas, em vez de listar uma entrada por curva.
+    def linha(**kwargs):
+        base = dict(color="0.2", linestyle="-", marker="None", lw=1.5)
+        base.update(kwargs)
+        return plt.Line2D([], [], **base)
+
+    # Montada a partir dos dicionarios de configuracao: se voce remover
+    # uma condicao de ESTILO_GRAVIDADE para deixar a figura mais limpa,
+    # a legenda acompanha sozinha.
+    marcadores = [linha(color=cor, label=nome) for nome, cor in CORES.items()]
+    marcadores += [linha(linestyle=traco, label=nome)
+                   for nome, traco in ESTILO_GRAVIDADE.items()]
+    marcadores += [linha(linestyle="None", marker=MARCAS[modelo], ms=6,
+                         markerfacecolor="none", markeredgewidth=1.4,
+                         label=modelo) for modelo in MODELOS]
+    eixo.legend(handles=marcadores, loc="upper center",
+                bbox_to_anchor=(0.5, -0.16), ncol=3, frameon=False,
+                handlelength=2.2, columnspacing=1.6)
+
     salvar_figura_malha(fig, "malha_tensao_von_mises")
 
 
 def figura_convergencia(convergencia):
-    """Variacao percentual a cada refino: o que justifica a malha."""
-    fig, eixos = plt.subplots(1, len(MODELOS), figsize=(11.0, 4.0), sharey=True)
-    eixos = np.atleast_1d(eixos)
+    """Variacao percentual a cada refino, tambem num grafico so."""
+    fig, eixo = plt.subplots(figsize=FIG_TAMANHO, layout="constrained")
     passos = [f"{ELEMENTOS[i]:.1f}→{ELEMENTOS[i+1]:.1f}"
               for i in range(len(ELEMENTOS) - 1)]
 
-    for eixo, modelo in zip(eixos, MODELOS):
-        for ponto in CORES:
-            serie = np.asarray(DADOS[(modelo, "com gravidade")][ponto], float)
+    for modelo in MODELOS:
+        for serie_nome, cor in CORES.items():
+            serie = np.asarray(DADOS[(modelo, "com gravidade")][serie_nome], float)
             variacao = 100.0 * np.abs(np.diff(serie)) / np.abs(serie[:-1])
-            eixo.plot(passos, variacao, MARCAS[ponto] + "-",
-                      color=CORES[ponto], ms=4.5, lw=1.4, label=ponto)
-        eixo.axhline(LIMITE_CONVERGENCIA, color="k", linestyle=":", lw=1.2)
-        eixo.text(0.02, LIMITE_CONVERGENCIA, f" {LIMITE_CONVERGENCIA:.0f}%",
-                  va="bottom", fontsize=8, transform=eixo.get_yaxis_transform())
-        eixo.set_yscale("log")
-        eixo.set_xlabel("Refino [$\\times 10^6$ elementos]")
-        eixo.set_title(MODELOS[modelo])
-        eixo.tick_params(axis="x", rotation=30)
-    eixos[0].set_ylabel("Variação da tensão (%)")
-    eixos[-1].legend(loc="best")
-    fig.tight_layout()
+            eixo.plot(passos, variacao, marker=MARCAS[modelo], color=cor,
+                      ms=6, lw=1.5, markerfacecolor="none", markeredgewidth=1.4,
+                      label=f"{modelo} — {serie_nome}")
+
+    eixo.axhline(LIMITE_CONVERGENCIA, color="k", linestyle=":", lw=1.4)
+    eixo.text(0.01, LIMITE_CONVERGENCIA, f" {LIMITE_CONVERGENCIA:.0f}%",
+              va="bottom", fontsize=FONTE_MARCAS,
+              transform=eixo.get_yaxis_transform())
+    eixo.set_yscale("log")
+    eixo.set_xlabel("Refino [$\\times 10^6$ elementos]", fontsize=FONTE_EIXO_X)
+    eixo.set_ylabel("Variação da tensão (%)", fontsize=FONTE_EIXO_Y)
+    eixo.tick_params(axis="x", rotation=20)
+    eixo.legend(loc="upper center", bbox_to_anchor=(0.5, -0.20), ncol=2,
+                frameon=False, handlelength=2.2)
     salvar_figura_malha(fig, "malha_convergencia")
 
 
@@ -190,7 +209,7 @@ def executar_malha():
 
     print("=== CONVERGENCIA DE MALHA (com gravidade) ===")
     vista = convergencia[convergencia["condicao"] == "com gravidade"]
-    print(vista[["modelo", "ponto", "tensao_malha_adotada_MPa",
+    print(vista[["modelo", "serie", "tensao_malha_adotada_MPa",
                  "tensao_malha_fina_MPa", "variacao_ultimo_refino_pct",
                  "variacao_maxima_pct", "monotonico", "convergido"]]
           .round(2).to_string(index=False))
@@ -200,7 +219,7 @@ def executar_malha():
         print(f"\n! {len(nao_convergiram)} série(s) NÃO convergiram "
               f"(variação > {LIMITE_CONVERGENCIA:.0f}% no último refino):")
         for _, linha in nao_convergiram.iterrows():
-            print(f"    {linha['modelo']:6s} {linha['ponto']:6s} "
+            print(f"    {linha['modelo']:6s} {linha['serie']:8s} "
                   f"{linha['condicao']:14s} -> {linha['variacao_ultimo_refino_pct']:6.1f}%")
         print("  Nesses pontos a tensão ainda depende da malha, então o valor"
               "\n  absoluto não pode ser reportado como resultado. Tensão que"
