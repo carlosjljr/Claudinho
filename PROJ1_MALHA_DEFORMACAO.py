@@ -24,6 +24,7 @@
 # =====================================================================
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.ticker import AutoMinorLocator, MultipleLocator
 
 EXPOENTES = np.arange(0.2, 3.001, 0.02)   # faixa de p varrida no ajuste
 
@@ -123,7 +124,8 @@ def gerar_grafico_tensao(tamanhos_malha, dados_series, caminho_saida,
                          mostrar_tendencia=True, mostrar_assintota=True,
                          inverter_eixo_x=False, cores=None,
                          rotulo_y="Deformação total [mm]",
-                         simbolo="σ", ignorar_fora_da_curva=False):
+                         simbolo="σ", ignorar_fora_da_curva=False,
+                         passo_y=None, passo_y_menor=None):
     """Tensao x tamanho do elemento, com a tendencia de cada curva.
 
     mostrar_assintota: marca sigma0 (o valor para h -> 0) com um traco
@@ -193,7 +195,18 @@ def gerar_grafico_tensao(tamanhos_malha, dados_series, caminho_saida,
         eixo.set_ylim(escala_y)
     if inverter_eixo_x:
         eixo.invert_xaxis()
-    eixo.grid(True, linestyle="--", linewidth=0.5)
+
+    # Poucos pontos no eixo Y deixam a leitura grosseira: o passo das
+    # marcas e fixado aqui para dar uma linha de grade por unidade.
+    if passo_y:
+        eixo.yaxis.set_major_locator(MultipleLocator(passo_y))
+        if passo_y_menor:
+            eixo.yaxis.set_minor_locator(MultipleLocator(passo_y_menor))
+        else:
+            eixo.yaxis.set_minor_locator(AutoMinorLocator(2))
+    eixo.grid(True, which="major", linestyle="--", linewidth=0.5)
+    eixo.grid(True, which="minor", axis="y", linestyle=":", linewidth=0.4,
+              alpha=0.5)
 
     # Uma entrada generica explica o tracejado, em vez de repetir uma
     # entrada de tendencia por curva.
@@ -237,9 +250,12 @@ DEFORMACAO = {
 }
 
 ARQUIVO_SAIDA = "grafico_deformacao_tendencia.png"
-# Escala focada no dado bom. Para ver o ponto de 1,8 mm dentro do
-# quadro, use (2.40, 3.90).
-ESCALA_Y = (2.45, 3.30)
+# None = escala automatica, com TODOS os pontos dentro do quadro
+# (inclusive os dois de 1,8 mm). Para dar zoom no trecho convergido,
+# use (2.45, 3.30).
+ESCALA_Y = None
+PASSO_Y = 0.1          # uma linha de grade a cada 0,1 mm
+PASSO_Y_MENOR = 0.05
 
 
 def imprimir_ajustes(ajustes, modelo="potencia", unidade="MPa", simbolo="σ"):
@@ -283,7 +299,7 @@ def imprimir_ajustes(ajustes, modelo="potencia", unidade="MPa", simbolo="σ"):
 if __name__ == "__main__":
     ajustes = gerar_grafico_tensao(
         COMPRIMENTO_ARESTA, DEFORMACAO, ARQUIVO_SAIDA,
-        escala_y=ESCALA_Y,
+        escala_y=ESCALA_Y, passo_y=PASSO_Y, passo_y_menor=PASSO_Y_MENOR,
         rotulo_y="Deformação total [mm]",
         simbolo="u",
         ignorar_fora_da_curva=True,

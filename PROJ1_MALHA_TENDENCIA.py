@@ -16,6 +16,7 @@
 # =====================================================================
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.ticker import AutoMinorLocator, MultipleLocator
 
 # ---------------------------------------------------------------------
 # AJUSTE DA TENDENCIA
@@ -138,7 +139,8 @@ def gerar_grafico_tensao(tamanhos_malha, dados_series, caminho_saida,
                          mostrar_tendencia=True, mostrar_assintota=True,
                          inverter_eixo_x=False, cores=None,
                          rotulo_y="Tensão (Von Mises) [MPa]",
-                         simbolo="σ", ignorar_fora_da_curva=False):
+                         simbolo="σ", ignorar_fora_da_curva=False,
+                         passo_y=None, passo_y_menor=None):
     """Tensao x tamanho do elemento, com a tendencia de cada curva.
 
     mostrar_assintota: marca sigma0 (o valor para h -> 0) com um traco
@@ -208,7 +210,18 @@ def gerar_grafico_tensao(tamanhos_malha, dados_series, caminho_saida,
         eixo.set_ylim(escala_y)
     if inverter_eixo_x:
         eixo.invert_xaxis()
-    eixo.grid(True, linestyle="--", linewidth=0.5)
+
+    # Poucos pontos no eixo Y deixam a leitura grosseira: o passo das
+    # marcas e fixado aqui para dar uma linha de grade por unidade.
+    if passo_y:
+        eixo.yaxis.set_major_locator(MultipleLocator(passo_y))
+        if passo_y_menor:
+            eixo.yaxis.set_minor_locator(MultipleLocator(passo_y_menor))
+        else:
+            eixo.yaxis.set_minor_locator(AutoMinorLocator(2))
+    eixo.grid(True, which="major", linestyle="--", linewidth=0.5)
+    eixo.grid(True, which="minor", axis="y", linestyle=":", linewidth=0.4,
+              alpha=0.5)
 
     # Uma entrada generica explica o tracejado, em vez de repetir uma
     # entrada de tendencia por curva.
@@ -311,7 +324,8 @@ if __name__ == "__main__":
 
     ajustes = gerar_grafico_tensao(
         tamanhos, series, "grafico_tensao_tendencia.png",
-        escala_y=(8, 32), modelo_tendencia="potencia",
+        escala_y=(8, 32), passo_y=1.0, passo_y_menor=0.5,
+        modelo_tendencia="potencia",
     )
     imprimir_ajustes(ajustes, "potencia")
     comparar_modelos(tamanhos, series)
