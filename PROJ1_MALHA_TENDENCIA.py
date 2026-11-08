@@ -140,7 +140,8 @@ def gerar_grafico_tensao(tamanhos_malha, dados_series, caminho_saida,
                          inverter_eixo_x=False, cores=None,
                          rotulo_y="Tensão (Von Mises) [MPa]",
                          simbolo="σ", ignorar_fora_da_curva=False,
-                         passo_y=None, passo_y_menor=None):
+                         passo_y=None, passo_y_menor=None,
+                         limitar_aos_dados=False):
     """Tensao x tamanho do elemento, com a tendencia de cada curva.
 
     mostrar_assintota: marca sigma0 (o valor para h -> 0) com um traco
@@ -188,14 +189,14 @@ def gerar_grafico_tensao(tamanhos_malha, dados_series, caminho_saida,
         confiavel = (modelo_tendencia == "potencia"
                      and not parametros.get("p_no_limite")
                      and parametros.get("r2", 0) >= 0.80)
-        inicio = 0.0 if confiavel else h.min()
+        inicio = 0.0 if (confiavel and not limitar_aos_dados) else h.min()
         finos = np.linspace(inicio, h.max(), 300)
         if modelo_tendencia == "log":
             finos = finos[finos > 0]
         eixo.plot(finos, funcao(finos), linestyle="--", color=cor,
                   lw=3.0, alpha=0.40, zorder=1)
 
-        if (mostrar_assintota and confiavel
+        if (mostrar_assintota and confiavel and not limitar_aos_dados
                 and np.isfinite(parametros.get("sigma0", np.nan))):
             eixo.axhline(parametros["sigma0"], color=cor, linestyle=":",
                          lw=1.0, alpha=0.6)
@@ -208,6 +209,17 @@ def gerar_grafico_tensao(tamanhos_malha, dados_series, caminho_saida,
     eixo.tick_params(axis="y", labelsize=16)
     if escala_y is not None:
         eixo.set_ylim(escala_y)
+    elif limitar_aos_dados:
+        # Enquadra exatamente o que foi medido: sem margem automatica
+        # nem trecho de tendencia alem do ultimo ponto.
+        todos = np.concatenate([np.asarray(v, float)
+                                for v in dados_series.values()])
+        todos = todos[np.isfinite(todos)]
+        if todos.size:
+            folga = 0.02 * (todos.max() - todos.min())
+            eixo.set_ylim(todos.min() - folga, todos.max() + folga)
+    if limitar_aos_dados:
+        eixo.set_xlim(h.min(), h.max())
     if inverter_eixo_x:
         eixo.invert_xaxis()
 
@@ -324,7 +336,8 @@ if __name__ == "__main__":
 
     ajustes = gerar_grafico_tensao(
         tamanhos, series, "grafico_tensao_tendencia.png",
-        escala_y=(8, 30), passo_y=1.0, passo_y_menor=0.5,
+        escala_y=None, passo_y=1.0, passo_y_menor=0.5,
+        limitar_aos_dados=True,
         modelo_tendencia="potencia",
     )
     imprimir_ajustes(ajustes, "potencia")
