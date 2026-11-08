@@ -23,6 +23,26 @@ import matplotlib.pyplot as plt
 EXPOENTES = np.arange(0.2, 3.001, 0.02)   # faixa de p varrida no ajuste
 
 
+def ajustar_divergente(h, sigma):
+    """Ajusta sigma = A * h^(-lambda): tensao SEM valor limite.
+
+    E o comportamento de uma singularidade geometrica (canto vivo), em
+    que a solucao exata da elasticidade e infinita no ponto e nenhum
+    elemento, de qualquer ordem, estabiliza. Serve para comparar com o
+    modelo convergente: se os dois ajustam igualmente bem, o estudo de
+    malha nao tem alcance para distinguir um caso do outro.
+    """
+    valido = np.isfinite(h) & np.isfinite(sigma)
+    h, sigma = np.asarray(h, float)[valido], np.asarray(sigma, float)[valido]
+    if h.size < 3 or np.any(h <= 0) or np.any(sigma <= 0):
+        return {}
+    a, b = np.polyfit(np.log(h), np.log(sigma), 1)
+    previsto = np.exp(b) * h ** a
+    total = np.sum((sigma - sigma.mean()) ** 2)
+    r2 = float(1.0 - np.sum((sigma - previsto) ** 2) / total) if total > 0 else np.nan
+    return {"lambda": float(-a), "A": float(np.exp(b)), "r2": r2}
+
+
 def ajustar_tendencia(h, sigma, modelo="potencia"):
     """Ajusta a tendencia de sigma(h) e devolve a funcao e os parametros.
 
@@ -99,10 +119,10 @@ def gerar_grafico_tensao(tamanhos_malha, dados_series, caminho_saida,
         cor = paleta[indice % len(paleta)]
         sigma = np.asarray(valores, float)
 
-        # Dados medidos: marcador com linha fraca, para a tendencia
-        # dominar a leitura sem esconder o dado bruto.
+        # O dado medido domina a leitura; a tendencia entra apagada
+        # atras dele, como apoio visual e nao como protagonista.
         eixo.plot(h, sigma, marker="o", linestyle="-", color=cor,
-                  lw=1.0, alpha=0.40, ms=7, label=rotulo)
+                  lw=1.6, alpha=1.0, ms=8, zorder=3, label=rotulo)
 
         if not mostrar_tendencia:
             continue
@@ -121,7 +141,8 @@ def gerar_grafico_tensao(tamanhos_malha, dados_series, caminho_saida,
         finos = np.linspace(inicio, h.max(), 300)
         if modelo_tendencia == "log":
             finos = finos[finos > 0]
-        eixo.plot(finos, funcao(finos), linestyle="--", color=cor, lw=2.2)
+        eixo.plot(finos, funcao(finos), linestyle="--", color=cor,
+                  lw=3.0, alpha=0.40, zorder=1)
 
         if (mostrar_assintota and confiavel
                 and np.isfinite(parametros.get("sigma0", np.nan))):
@@ -144,7 +165,8 @@ def gerar_grafico_tensao(tamanhos_malha, dados_series, caminho_saida,
     # entrada de tendencia por curva.
     alcas, rotulos = eixo.get_legend_handles_labels()
     if mostrar_tendencia:
-        alcas.append(plt.Line2D([], [], color="0.35", linestyle="--", lw=2.2))
+        alcas.append(plt.Line2D([], [], color="0.35", linestyle="--",
+                                lw=3.0, alpha=0.40))
         rotulos.append("tendência ajustada")
         if assintotas_desenhadas:
             alcas.append(plt.Line2D([], [], color="0.35", linestyle=":", lw=1.0))
@@ -154,6 +176,33 @@ def gerar_grafico_tensao(tamanhos_malha, dados_series, caminho_saida,
     fig.savefig(caminho_saida, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
     return ajustes
+
+
+def comparar_modelos(tamanhos, dados_series):
+    """Convergente x divergente: o estudo distingue os dois casos?"""
+    h = np.asarray(tamanhos, float)
+    print("\n=== O ESTUDO DISTINGUE CONVERGÊNCIA DE SINGULARIDADE? ===")
+    print(f"{'série':<30} {'R² converge':>12} {'R² diverge':>11} {'λ':>6}  conclusão")
+    for rotulo, valores in dados_series.items():
+        sigma = np.asarray(valores, float)
+        _, conv = ajustar_tendencia(h, sigma, "potencia")
+        div = ajustar_divergente(h, sigma)
+        if not conv or not div:
+            continue
+        diferenca = conv.get("r2", 0) - div.get("r2", 0)
+        if abs(diferenca) < 0.05:
+            conclusao = "empate — dado não decide"
+        elif diferenca > 0:
+            conclusao = "converge melhor"
+        else:
+            conclusao = "diverge melhor"
+        print(f"{rotulo:<30} {conv.get('r2', np.nan):12.3f} "
+              f"{div.get('r2', np.nan):11.3f} {div.get('lambda', np.nan):6.3f}"
+              f"  {conclusao}")
+    print("  Empate significa que a faixa de malhas ensaiada é curta demais "
+          "para\n  separar uma tensão que converge devagar de uma que não "
+          "converge.\n  Nos dois casos o pico de tensão não pode ser "
+          "reportado como convergido.")
 
 
 def imprimir_ajustes(ajustes, modelo="potencia"):
@@ -166,7 +215,7 @@ def imprimir_ajustes(ajustes, modelo="potencia"):
         for rotulo, par in ajustes.items():
             r2 = par.get("r2", np.nan)
             if par.get("p_no_limite"):
-                leitura = "NÃO CONVERGE — σ₀ sem significado"
+                leitura = "não estabilizou — σ₀ não citável"
             elif r2 < 0.80:
                 leitura = "ajuste fraco — não cite σ₀"
             elif par.get("p", 0) < 0.5:
@@ -215,6 +264,7 @@ if __name__ == "__main__":
         escala_y=(8, 32), modelo_tendencia="potencia",
     )
     imprimir_ajustes(ajustes, "potencia")
+    comparar_modelos(tamanhos, series)
 
     try:
         from IPython.display import Image, display
