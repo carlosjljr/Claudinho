@@ -324,7 +324,7 @@ if __name__ == "__main__":
 
     ajustes = gerar_grafico_tensao(
         tamanhos, series, "grafico_tensao_tendencia.png",
-        escala_y=(8, 32), passo_y=1.0, passo_y_menor=0.5,
+        escala_y=(8, 30), passo_y=1.0, passo_y_menor=0.5,
         modelo_tendencia="potencia",
     )
     imprimir_ajustes(ajustes, "potencia")
