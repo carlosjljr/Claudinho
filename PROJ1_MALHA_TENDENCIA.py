@@ -43,6 +43,41 @@ def ajustar_divergente(h, sigma):
     return {"lambda": float(-a), "A": float(np.exp(b)), "r2": r2}
 
 
+def detectar_fora_da_curva(h, y, modelo="potencia", fator=6.0, iteracoes=3):
+    """Indices que destoam dos VIZINHOS, nao de um ajuste global.
+
+    Comparar com a curva ajustada nao funciona aqui: um ponto muito
+    fora puxa o proprio ajuste e faz os vizinhos parecerem errados
+    tambem. Cada ponto e comparado com a media dos dois vizinhos, e a
+    escala de referencia e o passo tipico da serie (desvio absoluto
+    mediano das diferencas consecutivas). Assim o criterio se adapta
+    sozinho a series justas e a series espalhadas.
+    """
+    marcados = []
+    trabalho = np.array(y, dtype=float)
+    for _ in range(iteracoes):
+        indices = np.flatnonzero(np.isfinite(trabalho))
+        if indices.size < 5:
+            break
+        valores = trabalho[indices]
+
+        passos = np.abs(np.diff(valores))
+        escala = 1.4826 * np.median(np.abs(passos - np.median(passos)))
+        if not np.isfinite(escala) or escala <= 0:
+            break
+
+        # desvio de cada ponto interno em relacao aos vizinhos
+        desvio = np.full(valores.shape, 0.0)
+        desvio[1:-1] = valores[1:-1] - 0.5 * (valores[:-2] + valores[2:])
+        excesso = np.abs(desvio) / (fator * escala)
+        if not np.any(excesso > 1.0):
+            break
+        pior = int(np.argmax(excesso))
+        marcados.append(int(indices[pior]))
+        trabalho[indices[pior]] = np.nan
+    return sorted(marcados)
+
+
 def ajustar_tendencia(h, sigma, modelo="potencia"):
     """Ajusta a tendencia de sigma(h) e devolve a funcao e os parametros.
 
@@ -101,7 +136,9 @@ def ajustar_tendencia(h, sigma, modelo="potencia"):
 def gerar_grafico_tensao(tamanhos_malha, dados_series, caminho_saida,
                          dpi=300, escala_y=None, modelo_tendencia="potencia",
                          mostrar_tendencia=True, mostrar_assintota=True,
-                         inverter_eixo_x=False, cores=None):
+                         inverter_eixo_x=False, cores=None,
+                         rotulo_y="Tensão (Von Mises) [MPa]",
+                         simbolo="σ", ignorar_fora_da_curva=False):
     """Tensao x tamanho do elemento, com a tendencia de cada curva.
 
     mostrar_assintota: marca sigma0 (o valor para h -> 0) com um traco
@@ -126,7 +163,19 @@ def gerar_grafico_tensao(tamanhos_malha, dados_series, caminho_saida,
 
         if not mostrar_tendencia:
             continue
-        funcao, parametros = ajustar_tendencia(h, sigma, modelo_tendencia)
+
+        # Um unico ponto muito fora arrasta o ajuste inteiro. Quando
+        # pedido, ele sai do AJUSTE mas continua desenhado, circulado,
+        # para a figura nao esconder o dado original.
+        sigma_ajuste = sigma.copy()
+        fora = detectar_fora_da_curva(h, sigma, modelo_tendencia)
+        if fora and ignorar_fora_da_curva:
+            eixo.plot(h[fora], sigma[fora], "o", ms=16, mfc="none",
+                      mec=cor, mew=2.0, zorder=4)
+            sigma_ajuste[fora] = np.nan
+        funcao, parametros = ajustar_tendencia(h, sigma_ajuste, modelo_tendencia)
+        if fora:
+            parametros["fora_da_curva"] = [float(h[i]) for i in fora]
         if funcao is None:
             continue
         ajustes[rotulo] = parametros
@@ -151,7 +200,7 @@ def gerar_grafico_tensao(tamanhos_malha, dados_series, caminho_saida,
             assintotas_desenhadas.append(rotulo)
 
     eixo.set_xlabel("Tamanho dos elementos [mm]", fontsize=17)
-    eixo.set_ylabel("Tensão (Von Mises) [MPa]", fontsize=17)
+    eixo.set_ylabel(rotulo_y, fontsize=17)
     eixo.set_xticks(h)
     eixo.set_xticklabels([f"{v:.1f}" for v in h], fontsize=16)
     eixo.tick_params(axis="y", labelsize=16)
@@ -170,7 +219,7 @@ def gerar_grafico_tensao(tamanhos_malha, dados_series, caminho_saida,
         rotulos.append("tendência ajustada")
         if assintotas_desenhadas:
             alcas.append(plt.Line2D([], [], color="0.35", linestyle=":", lw=1.0))
-            rotulos.append("$\\sigma_0$ (malha infinita)")
+            rotulos.append(f"${simbolo}_0$ (malha infinita)")
     eixo.legend(alcas, rotulos, fontsize=16, loc="lower left", frameon=False)
 
     fig.savefig(caminho_saida, dpi=dpi, bbox_inches="tight")
@@ -205,13 +254,14 @@ def comparar_modelos(tamanhos, dados_series):
           "reportado como convergido.")
 
 
-def imprimir_ajustes(ajustes, modelo="potencia"):
+def imprimir_ajustes(ajustes, modelo="potencia", unidade="MPa", simbolo="σ"):
     """Tabela dos parametros, para ir ao texto do artigo."""
     if not ajustes:
         return
     print(f"\n=== TENDÊNCIA AJUSTADA (modelo: {modelo}) ===")
     if modelo == "potencia":
-        print(f"{'série':<30} {'σ₀ [MPa]':>10} {'p':>7} {'R²':>7}  leitura")
+        cabecalho = f"{simbolo}₀ [{unidade}]"
+        print(f"{'série':<30} {cabecalho:>12} {'p':>7} {'R²':>7}  leitura")
         for rotulo, par in ajustes.items():
             r2 = par.get("r2", np.nan)
             if par.get("p_no_limite"):
@@ -222,10 +272,10 @@ def imprimir_ajustes(ajustes, modelo="potencia"):
                 leitura = "convergência muito lenta"
             else:
                 leitura = "ok"
-            print(f"{rotulo:<30} {par['sigma0']:10.2f} {par['p']:7.2f} "
+            print(f"{rotulo:<30} {par['sigma0']:12.4f} {par['p']:7.2f} "
                   f"{r2:7.3f}  {leitura}")
-        print("  σ₀ = tensão extrapolada para h → 0; p = ordem observada "
-              "de convergência.")
+        print(f"  {simbolo}₀ = valor extrapolado para h → 0; "
+              f"p = ordem observada de convergência.")
         pinados = [r for r, p in ajustes.items() if p.get("p_no_limite")]
         if pinados:
             print(f"  ! {len(pinados)} série(s) com p na borda da grade: a "
