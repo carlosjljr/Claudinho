@@ -266,6 +266,10 @@ ARQUIVO_SAIDA = "grafico_deformacao_tendencia.png"
 # (inclusive os dois de 1,8 mm). Para dar zoom no trecho convergido,
 # use (2.45, 3.30).
 ESCALA_Y = None
+# False = figura so com os pontos medidos, sem linha de tendencia nem
+# marcacao de ponto fora da curva. A tabela de u0/p/R2 sai do mesmo
+# jeito no console.
+MOSTRAR_TENDENCIA = False
 PASSO_Y = 0.1          # uma linha de grade a cada 0,1 mm
 PASSO_Y_MENOR = 0.05
 
@@ -307,23 +311,52 @@ def imprimir_ajustes(ajustes, modelo="potencia", unidade="MPa", simbolo="σ"):
                   f"{par.get('r2', np.nan):7.3f}")
 
 
+def ajustar_series(h, dados_series, modelo="potencia",
+                   ignorar_fora_da_curva=True):
+    """Ajusta cada serie SEM desenhar nada.
+
+    Serve para o caso em que a figura mostra apenas os pontos medidos,
+    mas a tabela de u0, p e R2 ainda precisa ir para o texto.
+    """
+    h = np.asarray(h, float)
+    ajustes = {}
+    for rotulo, valores in dados_series.items():
+        y = np.asarray(valores, float)
+        fora = detectar_fora_da_curva(h, y, modelo)
+        if fora and ignorar_fora_da_curva:
+            y = y.copy()
+            y[fora] = np.nan
+        funcao, parametros = ajustar_tendencia(h, y, modelo)
+        if funcao is None:
+            continue
+        if fora:
+            parametros["fora_da_curva"] = [float(h[i]) for i in fora]
+        ajustes[rotulo] = parametros
+    return ajustes
+
+
 # ---------------------------------------------------------------------
 if __name__ == "__main__":
-    ajustes = gerar_grafico_tensao(
+    gerar_grafico_tensao(
         COMPRIMENTO_ARESTA, DEFORMACAO, ARQUIVO_SAIDA,
         escala_y=ESCALA_Y, passo_y=PASSO_Y, passo_y_menor=PASSO_Y_MENOR,
         limitar_aos_dados=True,
         rotulo_y="Deformação total [mm]",
         simbolo="u",
-        ignorar_fora_da_curva=True,
+        mostrar_tendencia=MOSTRAR_TENDENCIA,
+        ignorar_fora_da_curva=MOSTRAR_TENDENCIA,
     )
+
+    # A figura fica so com os pontos medidos; o ajuste continua sendo
+    # calculado, porque u0, p e R2 vao para o texto do artigo.
+    ajustes = ajustar_series(COMPRIMENTO_ARESTA, DEFORMACAO, "potencia")
     imprimir_ajustes(ajustes, "potencia", unidade="mm", simbolo="u")
 
     for serie, parametros in ajustes.items():
         if parametros.get("fora_da_curva"):
             arestas = ", ".join(f"{v:.1f}" for v in parametros["fora_da_curva"])
             print(f"  ponto fora da curva em {serie}: aresta {arestas} mm "
-                  f"(excluído do ajuste, desenhado circulado)")
+                  f"(excluído do ajuste)")
 
     try:
         from IPython.display import Image, display
