@@ -260,29 +260,91 @@ def figura_erro_angular(tabela, repet):
     salvar_figura_mapa(fig, "mapa_angular_erro")
 
 
-def figura_espaco_trabalho(tabela):
-    """Alvos x posicoes medidas no plano, um painel por protótipo."""
+def figura_radar(tabela):
+    """Mapa angular dos dois protótipos num unico grafico.
+
+    Dois paineis polares, um por atuador, cada um com o comando e as
+    duas bancadas. Juntar os protótipos aqui em vez de fazer um radar
+    para cada poupa metade do espaco na pagina e e justamente onde a
+    comparacao interessa: as duas curvas medidas lado a lado contra a
+    mesma referencia.
+    """
     nomes = list(tabela["prototipo"].unique())
-    fig, eixos = plt.subplots(1, len(nomes), figsize=(5.5 * len(nomes), 4.6),
+    pontos = np.arange(1, 26)
+    angulos = np.linspace(0, 2 * np.pi, pontos.size, endpoint=False)
+    fechar = lambda v: np.concatenate([v, v[:1]])
+    teta = fechar(angulos)
+
+    fig, eixos = plt.subplots(1, 2, figsize=(10.0, 5.2),
+                              subplot_kw=dict(polar=True))
+    for eixo, atuador in zip(eixos, (1, 2)):
+        primeiro = tabela[tabela["prototipo"] == nomes[0]]
+        eixo.plot(teta, fechar(primeiro[f"theta{atuador}_alvo"].to_numpy()),
+                  "k--", lw=1.6, label="Comandado")
+        for nome, cor in zip(nomes, ("tab:blue", "tab:orange")):
+            bloco = tabela[tabela["prototipo"] == nome]
+            eixo.plot(teta, fechar(bloco[f"theta{atuador}_medido"].to_numpy()),
+                      color=cor, lw=1.6, label=nome)
+        eixo.set_theta_offset(np.pi / 2)          # ponto 1 no topo
+        eixo.set_xticks(angulos)
+        eixo.set_xticklabels(pontos, fontsize=7)
+        eixo.set_yticks(list(ALVOS))
+        eixo.set_yticklabels([f"{v:.0f}°" for v in ALVOS], fontsize=7)
+        eixo.set_ylim(-10, 185)
+        eixo.set_title(f"({'ab'[atuador - 1]}) Atuador {atuador}", pad=16)
+    eixos[1].legend(loc="upper right", bbox_to_anchor=(1.22, 1.14),
+                    fontsize=9, frameon=False)
+    fig.tight_layout()
+    salvar_figura_mapa(fig, "mapa_angular_radar")
+
+
+def figura_grade_deformada(tabela):
+    """Malha 5x5 comandada x medida, no plano de trabalho.
+
+    Uma nuvem de pontos nao mostra onde cada um deveria estar. Cada
+    linha liga os cinco alvos do atuador 2 para um mesmo theta1, ou
+    seja, uma varredura completa do segundo elo: a comandada entra
+    tracejada, como referencia, e a medida por cima. A seta vermelha
+    vai do alvo ate onde o efetuador parou.
+
+    So as linhas de mesmo theta1 sao desenhadas. Ligar tambem as de
+    mesmo theta2 fecha um reticulado que, neste braco, se dobra sobre
+    si mesmo e vira um emaranhado ilegivel.
+    """
+    nomes = list(tabela["prototipo"].unique())
+    fig, eixos = plt.subplots(1, len(nomes), figsize=(5.2 * len(nomes), 4.8),
                               squeeze=False)
     for eixo, nome in zip(eixos[0], nomes):
         bloco = tabela[tabela["prototipo"] == nome]
-        eixo.plot(bloco["x_alvo"], bloco["y_alvo"], "s", markersize=6,
-                  markerfacecolor="none", label="Alvo")
-        eixo.plot(bloco["x_medido"], bloco["y_medido"], "o", markersize=4,
-                  label="Medido")
+        for colunas, estilo in ((("x_alvo", "y_alvo"),
+                                 dict(color="0.65", lw=0.9, ls="--")),
+                                (("x_medido", "y_medido"),
+                                 dict(color="tab:blue", lw=1.2, alpha=0.9))):
+            x = bloco[colunas[0]].to_numpy().reshape(5, 5)
+            y = bloco[colunas[1]].to_numpy().reshape(5, 5)
+            for i in range(5):
+                eixo.plot(x[i, :], y[i, :], **estilo)      # mesmo theta1
+
+        # vetor de erro: do alvo ate onde o efetuador realmente parou
         for _, linha in bloco.iterrows():
-            eixo.plot([linha["x_alvo"], linha["x_medido"]],
-                      [linha["y_alvo"], linha["y_medido"]],
-                      "-", color="0.5", linewidth=0.6)
-        eixo.plot(0, 0, "k+", markersize=10)
+            eixo.annotate("", xy=(linha["x_medido"], linha["y_medido"]),
+                          xytext=(linha["x_alvo"], linha["y_alvo"]),
+                          arrowprops=dict(arrowstyle="->", color="tab:red",
+                                          lw=0.9, shrinkA=0, shrinkB=0))
+        eixo.plot(bloco["x_alvo"], bloco["y_alvo"], "o", ms=4,
+                  mfc="none", mec="0.35", label="Comandado")
+        eixo.plot(bloco["x_medido"], bloco["y_medido"], "o", ms=4,
+                  color="tab:blue", label="Medido")
+        eixo.plot(0, 0, "k+", ms=10)
         eixo.set_aspect("equal", adjustable="datalim")
         eixo.set_xlabel("X (mm)")
         eixo.set_ylabel("Y (mm)")
-        eixo.set_title(f"{nome} — malha 5×5")
-        eixo.legend(loc="best")
+        erro = bloco["erro_cartesiano_mm"]
+        eixo.set_title(f"{nome} — erro médio {erro.mean():.1f} mm "
+                       f"(máx. {erro.max():.1f} mm)")
+        eixo.legend(loc="best", fontsize=9)
     fig.tight_layout()
-    salvar_figura_mapa(fig, "mapa_angular_espaco_trabalho")
+    salvar_figura_mapa(fig, "mapa_angular_grade")
 
 
 def conferir_comprimentos():
@@ -344,8 +406,9 @@ def executar_mapa_angular():
                   f"resíduo depois de corrigir cai para "
                   f"{linha['residuo_rms_graus']:.2f}° RMS.")
 
+    figura_radar(tabela)
+    figura_grade_deformada(tabela)
     figura_erro_angular(tabela, repet)
-    figura_espaco_trabalho(tabela)
     conferir_comprimentos()
 
     os.makedirs(PASTA_SAIDA, exist_ok=True)
