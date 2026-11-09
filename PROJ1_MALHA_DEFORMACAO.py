@@ -269,7 +269,7 @@ ESCALA_Y = None
 # False = figura so com os pontos medidos, sem linha de tendencia nem
 # marcacao de ponto fora da curva. A tabela de u0/p/R2 sai do mesmo
 # jeito no console.
-MOSTRAR_TENDENCIA = False
+MOSTRAR_TENDENCIA = True
 PASSO_Y = 0.1          # uma linha de grade a cada 0,1 mm
 PASSO_Y_MENOR = 0.05
 
