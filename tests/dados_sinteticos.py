@@ -31,6 +31,7 @@ def gerar_ensaio(
     ruido=0.02,
     semente=0,
     n_degraus=None,
+    ganho=1.0,
 ):
     """Cria (t, x, y) de um ensaio com escada de degraus conhecida.
 
@@ -45,9 +46,10 @@ def gerar_ensaio(
     if n_degraus is None:
         n_degraus = int(180.0 / passo)
 
+    # ganho < 1 reproduz o servo que entrega menos do que o comandado
     angulo = np.zeros_like(t)
     for k in range(n_degraus):
-        angulo += resposta_degrau(tau, k * 1.0, passo)
+        angulo += resposta_degrau(tau, k * 1.0, ganho * passo)
 
     angulo_total = theta0 + sentido * angulo
     angulo_total += rng.normal(0.0, ruido, angulo_total.size)

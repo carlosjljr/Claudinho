@@ -688,6 +688,10 @@ def metricas_por_degrau(ensaio):
     n_degraus = min(int(ANGULO_MAX_GRAUS / passo),
                     int(np.floor(duracao / PERIODO_DEGRAU_S)))
 
+    # Ponto de partida medido: onde o braco estava antes do 1o degrau.
+    antes = resposta[tau < 0]
+    anterior = float(np.median(antes)) if antes.size else 0.0
+
     linhas = []
     for k in range(n_degraus):
         inicio, fim = k * PERIODO_DEGRAU_S, (k + 1) * PERIODO_DEGRAU_S
@@ -724,6 +728,14 @@ def metricas_por_degrau(ensaio):
         else:
             t_assentamento = np.nan
 
+        # QUANTO O BRACO ANDOU NESTE DEGRAU, em relacao ao que andou no
+        # anterior -- nao ao comando acumulado. E o que separa um degrau
+        # subatuado (entrega < 100%) de um equivalente ou adiantado. O
+        # erro de regime acumula; este indicador nao.
+        avanco = valor_final - anterior
+        if np.isfinite(valor_final):
+            anterior = valor_final
+
         pico = float(np.max(resp_j))
         linhas.append({
             "prototipo": ensaio["prototipo"],
@@ -733,6 +745,8 @@ def metricas_por_degrau(ensaio):
             "alvo_comandado_graus": alvo,
             "valor_final_graus": valor_final,
             "erro_regime_graus": valor_final - alvo,
+            "avanco_medido_graus": avanco,
+            "entrega_pct": 100.0 * avanco / passo if passo else np.nan,
             "sobressinal_graus": pico - valor_final,
             "sobressinal_pct": 100.0 * (pico - valor_final) / passo,
             "tempo_subida_s": t90 - t10 if np.isfinite(t10) and np.isfinite(t90) else np.nan,
@@ -986,6 +1000,171 @@ def plot_assentamento(grupo, por_degrau):
     salvar_figura_traj(fig, "TEMPO DE ASSENTAMENTO", f"assentamento_{ref['prototipo']}_{ref['categoria']}")
 
 
+def plot_degraus_sobrepostos(grupo, por_degrau):
+    """TODOS os degraus do grupo sobrepostos, normalizados pelo passo.
+
+    Esta e a figura que responde "subatuado, equivalente ou adiantado".
+    Cada degrau de cada repeticao vira uma curva fina que comeca em 0 e
+    deveria terminar em 1. Onde o conjunto estabiliza diz tudo:
+        abaixo de 1 -> o servo entregou menos que o comandado
+        em 1        -> entregou o comandado
+        acima de 1  -> passou do comandado
+    Plotar os degraus juntos, e nao a trajetoria inteira, tira o erro
+    acumulado da frente: cada degrau e julgado pelo que ele proprio fez.
+    """
+    ref = grupo[0]
+    passo = abs(ref["passo"])
+    grade = np.linspace(0.0, PERIODO_DEGRAU_S, 120)
+    curvas = []
+
+    fig, eixo = plt.subplots(figsize=FIG_TAMANHO, layout="constrained")
+    for ensaio in grupo:
+        tau, resposta = ensaio["tau"], ensaio["theta_rel"]
+        meu = por_degrau[
+            (por_degrau["prototipo"] == ensaio["prototipo"])
+            & (por_degrau["categoria"] == ensaio["categoria"])
+            & (por_degrau["repeticao"] == ensaio["repeticao"])
+        ]
+        for _, linha in meu.iterrows():
+            inicio = (linha["degrau"] - 1) * PERIODO_DEGRAU_S
+            base = linha["valor_final_graus"] - linha["avanco_medido_graus"]
+            janela = (tau >= inicio) & (tau < inicio + PERIODO_DEGRAU_S)
+            if janela.sum() < 3 or not np.isfinite(base):
+                continue
+            normalizada = (resposta[janela] - base) / passo
+            curvas.append(np.interp(grade, tau[janela] - inicio, normalizada))
+            eixo.plot(grade, curvas[-1], color="0.70", lw=0.6, zorder=1)
+
+    if not curvas:
+        plt.close(fig)
+        return
+    media = np.mean(curvas, axis=0)
+    entregue = float(np.median([c[-1] for c in curvas]))
+    if entregue < 1.0 - BANDA_ASSENTAMENTO:
+        leitura = "subatuado"
+    elif entregue > 1.0 + BANDA_ASSENTAMENTO:
+        leitura = "adiantado"
+    else:
+        leitura = "equivalente"
+
+    eixo.axhspan(1.0 - BANDA_ASSENTAMENTO, 1.0 + BANDA_ASSENTAMENTO,
+                 color="0.85", zorder=0,
+                 label=f"Comando ±{100*BANDA_ASSENTAMENTO:.0f}% do passo")
+    eixo.plot(grade, media, color="tab:blue", lw=2.4, zorder=3,
+              label=f"Média de {len(curvas)} degraus")
+    eixo.axhline(entregue, color="tab:red", linestyle="--", lw=1.4, zorder=2,
+                 label=f"Entrega: {100*entregue:.0f}% — {leitura}")
+    eixo.set_xlabel("Tempo desde o degrau (s)")
+    eixo.set_ylabel("Avanço / passo comandado")
+    eixo.set_title(f"{ref['prototipo']} — {ref['categoria']} "
+                   f"(passo de {passo:.0f}°)")
+    eixo.legend(loc="lower right")
+    salvar_figura_traj(fig, "DEGRAUS SOBREPOSTOS",
+                       f"degraus_{ref['prototipo']}_{ref['categoria']}")
+
+
+def plot_ganho(grupo, por_degrau):
+    """Angulo medido x angulo comandado, degrau a degrau.
+
+    A reta de 45 graus e o comportamento ideal. A inclinacao do ajuste e
+    o ganho do servo: quanto ele entrega por grau pedido.
+    """
+    ref = grupo[0]
+    meu = por_degrau[(por_degrau["prototipo"] == ref["prototipo"])
+                     & (por_degrau["categoria"] == ref["categoria"])]
+    valido = meu[["alvo_comandado_graus", "valor_final_graus"]].dropna()
+    if len(valido) < 3:
+        return
+    x = valido["alvo_comandado_graus"].to_numpy()
+    y = valido["valor_final_graus"].to_numpy()
+    ganho, offset = np.polyfit(x, y, 1)
+
+    fig, eixo = plt.subplots(figsize=FIG_TAMANHO, layout="constrained")
+    limite = [0.0, max(x.max(), y.max()) * 1.05]
+    eixo.plot(limite, limite, "k--", lw=1.4, label="Ideal (ganho = 1)")
+    for ensaio in grupo:
+        bloco = meu[meu["repeticao"] == ensaio["repeticao"]]
+        eixo.plot(bloco["alvo_comandado_graus"], bloco["valor_final_graus"],
+                  "o", ms=4, label=f"Experimento {ensaio['repeticao']}")
+    eixo.plot(limite, [ganho * v + offset for v in limite], color="tab:red",
+              lw=2.0, label=f"Ajuste: ganho {ganho:.3f}")
+    eixo.set_xlabel("Ângulo comandado (graus)")
+    eixo.set_ylabel("Ângulo medido (graus)")
+    eixo.set_title(f"{ref['prototipo']} — {ref['categoria']}")
+    eixo.legend(loc="upper left")
+    salvar_figura_traj(fig, "GANHO DO SERVO",
+                       f"ganho_{ref['prototipo']}_{ref['categoria']}")
+
+
+def plot_assentamento_por_passo(por_degrau):
+    """Assentamento de TODOS os degraus, agrupado por tamanho do passo."""
+    if por_degrau.empty:
+        return
+    dados = por_degrau.copy()
+    dados["passo_graus"] = dados["categoria"].map(passo_da_categoria)
+    dados["servo"] = np.where(dados["categoria"].str.contains("S1"),
+                              "Servo 1", "Servo 2")
+
+    chaves = sorted(dados.groupby(["prototipo", "servo"]).groups)
+    passos = sorted(dados["passo_graus"].unique())
+    fig, eixo = plt.subplots(figsize=(FIG_TAMANHO[0] * 1.25, FIG_TAMANHO[1]),
+                             layout="constrained")
+    largura = 0.8 / max(len(chaves), 1)
+    for i, (prototipo, servo) in enumerate(chaves):
+        bloco = dados[(dados["prototipo"] == prototipo)
+                      & (dados["servo"] == servo)]
+        medianas, erros = [], []
+        for passo in passos:
+            amostra = bloco.loc[bloco["passo_graus"] == passo,
+                                "tempo_assentamento_s"].dropna()
+            medianas.append(1000 * amostra.median() if amostra.size else np.nan)
+            erros.append(1000 * amostra.std() if amostra.size > 1 else 0.0)
+        eixo.bar(np.arange(len(passos)) + i * largura, medianas, largura,
+                 yerr=erros, capsize=3, label=f"{prototipo} — {servo}")
+    eixo.set_xticks(np.arange(len(passos)) + largura * (len(chaves) - 1) / 2)
+    eixo.set_xticklabels([f"{p:.0f}°" for p in passos])
+    eixo.set_xlabel("Passo comandado")
+    eixo.set_ylabel("Tempo de assentamento (ms)")
+    eixo.set_title(f"Mediana de todos os degraus "
+                   f"(±{100*BANDA_ASSENTAMENTO:.0f}% do passo)")
+    eixo.legend(loc="best", ncol=2)
+    salvar_figura_traj(fig, "TEMPO DE ASSENTAMENTO", "assentamento_por_passo")
+
+
+def tabela_assentamento(por_degrau):
+    """Assentamento e entrega de TODOS os degraus, pronto para o texto."""
+    if por_degrau.empty:
+        return pd.DataFrame()
+    dados = por_degrau.copy()
+    dados["passo_graus"] = dados["categoria"].map(passo_da_categoria)
+    dados["servo"] = np.where(dados["categoria"].str.contains("S1"),
+                              "Servo 1", "Servo 2")
+    linhas = []
+    for (prototipo, servo, passo), bloco in dados.groupby(
+            ["prototipo", "servo", "passo_graus"]):
+        assentou = bloco["tempo_assentamento_s"].dropna()
+        entrega = bloco["entrega_pct"].dropna()
+        mediana = float(entrega.median()) if entrega.size else np.nan
+        if mediana < 100 - 100 * BANDA_ASSENTAMENTO:
+            leitura = "subatuado"
+        elif mediana > 100 + 100 * BANDA_ASSENTAMENTO:
+            leitura = "adiantado"
+        else:
+            leitura = "equivalente"
+        linhas.append({
+            "prototipo": prototipo, "servo": servo, "passo_graus": passo,
+            "degraus": len(bloco),
+            "nao_assentaram": int(bloco["tempo_assentamento_s"].isna().sum()),
+            "t_mediano_ms": 1000 * assentou.median() if assentou.size else np.nan,
+            "t_medio_ms": 1000 * assentou.mean() if assentou.size else np.nan,
+            "t_desvio_ms": 1000 * assentou.std() if assentou.size > 1 else np.nan,
+            "t_maximo_ms": 1000 * assentou.max() if assentou.size else np.nan,
+            "entrega_mediana_pct": mediana,
+            "leitura": leitura,
+        })
+    return pd.DataFrame(linhas)
+
+
 def plot_comparacao_prototipos(resumo):
     """PE01 x PE02: tempo de assentamento medio por categoria."""
     if resumo.empty:
@@ -1090,13 +1269,18 @@ def executar_trajetoria(cliente=None):
         plot_angulo(grupo, por_degrau, zoom=ZOOM_SEGUNDOS)
         plot_media(grupo, por_degrau)
         plot_assentamento(grupo, por_degrau)
+        plot_degraus_sobrepostos(grupo, por_degrau)
+        plot_ganho(grupo, por_degrau)
+    plot_assentamento_por_passo(por_degrau)
     plot_comparacao_prototipos(resumo)
 
     print("PARTE 5/5 - Exportação")
+    assentamento = tabela_assentamento(por_degrau)
     os.makedirs(PASTA_RESULTADOS, exist_ok=True)
     for nome, tabela in (("metricas_por_degrau", por_degrau),
                          ("metricas_por_ensaio", por_ensaio),
-                         ("resumo_por_categoria", resumo)):
+                         ("resumo_por_categoria", resumo),
+                         ("assentamento_por_passo", assentamento)):
         if not tabela.empty:
             tabela.to_csv(os.path.join(PASTA_RESULTADOS, f"{nome}.csv"),
                           index=False, sep=";", decimal=",")
@@ -1112,8 +1296,27 @@ def executar_trajetoria(cliente=None):
         vista.columns = ["Protótipo", "Categoria", "Média", "Desvio", "Máximo"]
         print(vista.to_string(index=False))
 
+    if not assentamento.empty:
+        print("\n=== TODOS OS DEGRAUS: ASSENTAMENTO E ENTREGA ===")
+        vista = assentamento.copy()
+        vista["passo_graus"] = vista["passo_graus"].map(lambda v: f"{v:.0f}°")
+        for coluna in ("t_mediano_ms", "t_medio_ms", "t_desvio_ms",
+                       "t_maximo_ms"):
+            vista[coluna] = vista[coluna].round(0)
+        # uma casa decimal: com o ganho perto de 95% o arredondamento
+        # para inteiro faria a tabela parecer contraditoria
+        vista["entrega_mediana_pct"] = vista["entrega_mediana_pct"].round(1)
+        vista.columns = ["Protótipo", "Servo", "Passo", "Degraus", "Não assent.",
+                         "Mediana", "Média", "Desvio", "Máximo", "Entrega %",
+                         "Leitura"]
+        print(vista.to_string(index=False))
+        print("  Tempos em ms. Entrega = avanço medido / passo comandado:"
+              "\n  abaixo de 95% subatuado, até 105% equivalente, acima "
+              "adiantado.")
+
     return {"ensaios": ensaios, "metricas_por_degrau": por_degrau,
-            "metricas_por_ensaio": por_ensaio, "resumo_por_categoria": resumo}
+            "metricas_por_ensaio": por_ensaio, "resumo_por_categoria": resumo,
+            "assentamento_por_passo": assentamento}
 
 
 if EM_COLAB:
