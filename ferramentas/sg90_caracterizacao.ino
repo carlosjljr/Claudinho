@@ -1,204 +1,391 @@
 // =====================================================================
-// CARACTERIZACAO DO SG90 - varredura por largura de pulso
+// CARACTERIZACAO DO SG90 - tudo dentro do Arduino IDE
 // =====================================================================
-// Liga o servo e varre a faixa inteira em micropassos, parando em cada
-// largura o tempo necessario para o braco assentar. A cada parada envia
-// uma linha CSV pela serial; basta filmar o braco e casar as linhas com
-// o video pelo piscar do LED, que marca o inicio da varredura.
+// Acha a faixa util do servo, calibra graus -> microssegundos e passa a
+// posicionar pela calibracao medida. Nao precisa de Python.
 //
-// POR QUE LARGURA DE PULSO, E NAO Servo.write(graus)
-// A biblioteca Servo converte 0..180 graus para 544..2400 us por
-// padrao. Essa faixa e uma convencao da biblioteca, nao do SG90: o
-// servo real tem a sua, e a diferenca entre as duas aparece como ganho
-// (o braco entrega menos grau do que foi pedido) e como offset. Medindo
-// a largura de pulso diretamente, a conversao graus->us passa a ser
-// medida, nao suposta.
+// POR QUE NAO Servo.write(graus)
+// A biblioteca Servo converte 0..180 graus para 544..2400 us. Essa
+// faixa e uma convencao da biblioteca, NAO do SG90. Como cada servo tem
+// a sua, a diferenca aparece como erro de ganho: o braco entrega menos
+// grau do que foi pedido. Aqui tudo e comandado em microssegundos e a
+// conversao graus->us e MEDIDA.
+//
+// O SKETCH NAO ENXERGA O BRACO
+// Malha aberta: nao ha realimentacao. Ele nao sabe se o braco andou,
+// parou ou travou. Por isso o limite da faixa e marcado por VOCE, com a
+// busca guiada: o braco anda um micropasso por comando e para. Assim
+// nunca se corre a faixa inteira as cegas contra o batente.
+//
+//   ZUMBIDO COM O BRACO PARADO = servo empurrando o batente. Recue um
+//   passo na hora: parado ali ele puxa corrente, esquenta e desgasta a
+//   engrenagem.
 //
 // LIGACAO
-//   sinal   -> pino 9 (qualquer PWM serve)
-//   VCC     -> fonte externa de 5 V (NAO o 5 V do Arduino: o SG90 puxa
-//              de 150 mA parado a mais de 700 mA no arranque e derruba
-//              a placa)
-//   GND     -> GND da fonte E GND do Arduino, no mesmo ponto
+//   sinal -> pino 9
+//   VCC   -> fonte externa de 5 V (o 5 V da placa nao aguenta: o SG90
+//            passa de 700 mA no arranque e derruba o Arduino)
+//   GND   -> GND da fonte E GND do Arduino, no mesmo ponto
 //
-// COMANDOS PELA SERIAL (9600 bps, "Nova linha" ao final)
-//   V            varre de MIN a MAX e volta
-//   P <us>       vai para uma largura de pulso e fica
-//   G <graus>    vai para um angulo usando a calibracao abaixo
-//   F <min> <max>  muda a faixa varrida
-//   D <us>       muda o micropasso (padrao 5 us)
-//   T <ms>       muda a espera em cada parada (padrao 400 ms)
-//   L            solta o servo (detach): para de segurar e de aquecer
-//   ?            mostra a configuracao atual
+// ROTEIRO
+//   1. Abra o Monitor Serial em 9600, com "Nova linha" ao final.
+//   2. C         centraliza em 1500 us (posicao segura)
+//   3. - - -     desce de micropasso em micropasso ate o braco parar de
+//                avancar; ZUMBIU, volte um passo com +
+//      [         marca ali o limite INFERIOR
+//   4. + + +     sobe ate o braco parar de avancar
+//      ]         marca o limite SUPERIOR
+//   5. M <graus> em algumas posicoes dentro da faixa, meca o angulo com
+//                transferidor ou video e registre o par (pulso, angulo)
+//   6. A         ajusta a reta graus->us com os pares registrados
+//   7. G <graus> daqui em diante o braco vai ao angulo de verdade
+//   8. V         varredura completa, so para registrar a curva em video
+//
+// NO TINKERCAD
+// O servo simulado e ideal: aceita 544..2400 us, nao tem zona morta,
+// nem folga, nem batente, e nao zumbe. Serve para conferir os comandos
+// e a serial; os limites e a calibracao so saem do servo de verdade.
+// Se o Tinkercad reclamar do EEPROM.h, troque USAR_EEPROM para 0.
 // =====================================================================
+#define USAR_EEPROM 1
+
 #include <Servo.h>
+#if USAR_EEPROM
+#include <EEPROM.h>
+#endif
 
 const uint8_t PINO_SERVO = 9;
 const uint8_t PINO_LED = LED_BUILTIN;
+const int LIMITE_ABSOLUTO_MIN = 400;   // nenhum comando passa daqui
+const int LIMITE_ABSOLUTO_MAX = 2600;
+const uint8_t MAX_PARES = 12;          // pontos de calibracao guardados
 
-// Faixa varrida. Comece conservador: amplie so depois de ver, no
-// proprio ensaio, que o braco ainda se move e NAO esta zunindo. Zumbido
-// parado = servo empurrando contra o batente mecanico, consumindo
-// corrente e esquentando sem sair do lugar.
-int larguraMin = 600;      // us
-int larguraMax = 2400;     // us
-int micropasso = 5;        // us entre paradas
-int esperaMs = 400;        // tempo parado em cada largura
+int larguraMin = 1000;     // faixa de trabalho, estreita ate ser medida
+int larguraMax = 2000;
+int micropasso = 5;        // us por toque em + ou -
+int esperaMs = 400;        // parada em cada largura durante a varredura
+int larguraAtual = 1500;
 
-// Calibracao medida (preencha com a saida do sg90_calibracao.py).
-// Enquanto nao houver medicao, estes valores sao so o padrao da
-// biblioteca -- o mesmo que gerou o erro de ganho.
+// Calibracao. Comeca com o padrao da biblioteca, que e justamente o que
+// se quer substituir por medicao.
 float usPorGrau = (2400.0 - 544.0) / 180.0;
 float usEmZeroGrau = 544.0;
 
-Servo servo;
-int larguraAtual = 1500;
+int paresUs[MAX_PARES];
+float paresGrau[MAX_PARES];
+uint8_t nPares = 0;
 
+Servo servo;
+
+// ---------------------------------------------------------------------
+// MOVIMENTO
+// ---------------------------------------------------------------------
 void aplicar(int largura) {
-  largura = constrain(largura, larguraMin, larguraMax);
-  if (!servo.attached()) servo.attach(PINO_SERVO, larguraMin, larguraMax);
+  largura = constrain(largura, LIMITE_ABSOLUTO_MIN, LIMITE_ABSOLUTO_MAX);
+  if (!servo.attached()) {
+    servo.attach(PINO_SERVO, LIMITE_ABSOLUTO_MIN, LIMITE_ABSOLUTO_MAX);
+  }
   servo.writeMicroseconds(largura);
   larguraAtual = largura;
 }
 
-void cabecalho() {
-  Serial.println(F("# ms;largura_us;sentido;grau_nominal"));
+void passo(int sentido) {
+  int alvo = larguraAtual + sentido * micropasso;
+  if (alvo < LIMITE_ABSOLUTO_MIN || alvo > LIMITE_ABSOLUTO_MAX) {
+    Serial.println(F("! limite absoluto do sketch; nao vou alem"));
+    return;
+  }
+  aplicar(alvo);
+  Serial.print(F("pulso = "));
+  Serial.print(larguraAtual);
+  Serial.print(F(" us   (grau estimado "));
+  Serial.print((larguraAtual - usEmZeroGrau) / usPorGrau, 1);
+  Serial.println(F(")"));
+  Serial.println(F("  avancou? repita. parou ou zumbiu? volte um passo e "
+                   "marque com [ ou ]"));
 }
 
-void registrar(const char* sentido) {
-  // grau_nominal e so a leitura da calibracao ATUAL, para conferencia.
-  // O angulo de verdade vem da medicao em video, fora daqui.
-  float grau = (larguraAtual - usEmZeroGrau) / usPorGrau;
-  Serial.print(millis());      Serial.print(';');
-  Serial.print(larguraAtual);  Serial.print(';');
-  Serial.print(sentido);       Serial.print(';');
-  Serial.println(grau, 2);
+// ---------------------------------------------------------------------
+// CALIBRACAO
+// ---------------------------------------------------------------------
+void registrarPar(float graus) {
+  if (nPares >= MAX_PARES) {
+    Serial.println(F("! cheio; use A para ajustar ou Z para zerar"));
+    return;
+  }
+  paresUs[nPares] = larguraAtual;
+  paresGrau[nPares] = graus;
+  nPares++;
+  Serial.print(F("ponto "));   Serial.print(nPares);
+  Serial.print(F(": "));       Serial.print(larguraAtual);
+  Serial.print(F(" us = "));   Serial.print(graus, 2);
+  Serial.println(F(" graus"));
 }
 
+void ajustarReta() {
+  // Minimos quadrados de us = a*graus + b. Com dois pontos vira a reta
+  // que passa por eles; com mais, a media ponderada que melhor os
+  // representa -- e e por isso que vale medir em varias posicoes, e nao
+  // so nas duas pontas, onde a folga e maior.
+  if (nPares < 2) {
+    Serial.println(F("! preciso de pelo menos 2 pontos (comando M)"));
+    return;
+  }
+  float somaX = 0, somaY = 0, somaXY = 0, somaXX = 0;
+  for (uint8_t i = 0; i < nPares; i++) {
+    somaX += paresGrau[i];
+    somaY += paresUs[i];
+    somaXY += paresGrau[i] * paresUs[i];
+    somaXX += paresGrau[i] * paresGrau[i];
+  }
+  float n = nPares;
+  float denominador = n * somaXX - somaX * somaX;
+  if (fabs(denominador) < 1e-6) {
+    Serial.println(F("! os pontos tem o mesmo angulo; meca em posicoes "
+                     "diferentes"));
+    return;
+  }
+  usPorGrau = (n * somaXY - somaX * somaY) / denominador;
+  usEmZeroGrau = (somaY - usPorGrau * somaX) / n;
+
+  float pior = 0;
+  for (uint8_t i = 0; i < nPares; i++) {
+    float previsto = usEmZeroGrau + usPorGrau * paresGrau[i];
+    float desvio = fabs(paresUs[i] - previsto);
+    // Comparacao explicita em vez de max(): em placas cujo core define
+    // max como template (ESP32, SAMD), misturar float com double nao
+    // compila. Assim o sketch vale em qualquer placa.
+    if (desvio > pior) pior = desvio;
+  }
+
+  Serial.println(F("--- calibracao ajustada ---"));
+  Serial.print(F("  us = "));     Serial.print(usEmZeroGrau, 1);
+  Serial.print(F(" + "));         Serial.print(usPorGrau, 4);
+  Serial.println(F(" * graus"));
+  Serial.print(F("  0 grau -> "));   Serial.print(usEmZeroGrau, 0);
+  Serial.print(F(" us ; 180 graus -> "));
+  Serial.print(usEmZeroGrau + 180.0 * usPorGrau, 0);
+  Serial.println(F(" us"));
+  Serial.print(F("  maior desvio: ")); Serial.print(pior, 1);
+  Serial.print(F(" us ("));            Serial.print(pior / usPorGrau, 2);
+  Serial.println(F(" graus)"));
+  float padrao = (2400.0 - 544.0) / 180.0;
+  Serial.print(F("  a biblioteca Servo usa "));  Serial.print(padrao, 4);
+  Serial.print(F(" us/grau ("));
+  Serial.print(100.0 * (usPorGrau / padrao - 1.0), 1);
+  Serial.println(F("% de diferenca)"));
+}
+
+#if USAR_EEPROM
+const int ENDERECO = 0;
+const uint32_t ASSINATURA = 0x53473930;   // "SG90"
+
+void gravarEeprom() {
+  int endereco = ENDERECO;
+  EEPROM.put(endereco, ASSINATURA);       endereco += sizeof(ASSINATURA);
+  EEPROM.put(endereco, usPorGrau);        endereco += sizeof(usPorGrau);
+  EEPROM.put(endereco, usEmZeroGrau);     endereco += sizeof(usEmZeroGrau);
+  EEPROM.put(endereco, larguraMin);       endereco += sizeof(larguraMin);
+  EEPROM.put(endereco, larguraMax);
+  Serial.println(F("gravado na EEPROM; sobrevive a desligar a placa"));
+}
+
+bool lerEeprom() {
+  int endereco = ENDERECO;
+  uint32_t marca;
+  EEPROM.get(endereco, marca);
+  if (marca != ASSINATURA) return false;
+  endereco += sizeof(marca);
+  EEPROM.get(endereco, usPorGrau);        endereco += sizeof(usPorGrau);
+  EEPROM.get(endereco, usEmZeroGrau);     endereco += sizeof(usEmZeroGrau);
+  EEPROM.get(endereco, larguraMin);       endereco += sizeof(larguraMin);
+  EEPROM.get(endereco, larguraMax);
+  return true;
+}
+#endif
+
+// ---------------------------------------------------------------------
+// VARREDURA
+// ---------------------------------------------------------------------
 void piscarSincronismo() {
-  // Marca visivel no video: tres piscadas curtas antes de comecar.
   for (uint8_t i = 0; i < 3; i++) {
     digitalWrite(PINO_LED, HIGH); delay(120);
     digitalWrite(PINO_LED, LOW);  delay(120);
   }
 }
 
-void varrer() {
-  Serial.println(F("# inicio da varredura"));
-  cabecalho();
+void registrar(const char* sentido) {
+  Serial.print(millis());       Serial.print(';');
+  Serial.print(larguraAtual);   Serial.print(';');
+  Serial.print(sentido);        Serial.print(';');
+  Serial.println((larguraAtual - usEmZeroGrau) / usPorGrau, 2);
+}
 
-  // Sai da faixa pelo lado de baixo e espera: a primeira parada precisa
-  // comecar de um repouso conhecido, senao ela carrega o transitorio da
-  // posicao anterior.
+void varrer() {
+  Serial.println(F("# varredura; 3 piscadas marcam o inicio no video"));
+  Serial.println(F("# ms;largura_us;sentido;grau_estimado"));
   aplicar(larguraMin);
   delay(1000);
   piscarSincronismo();
 
   for (int us = larguraMin; us <= larguraMax; us += micropasso) {
-    aplicar(us);
-    delay(esperaMs);
-    registrar("sobe");
+    aplicar(us); delay(esperaMs); registrar("sobe");
   }
-  // A volta mede a HISTERESE: o SG90 nao para na mesma posicao quando
-  // chega por cima ou por baixo, por causa da folga da engrenagem. Sem
-  // a volta, essa folga some dentro do erro e nao da para separar.
+  // A volta mede a folga da engrenagem: o braco nao para no mesmo lugar
+  // chegando por cima e por baixo. Sem ela, essa parcela some dentro do
+  // erro e nao da para separar do ganho.
   for (int us = larguraMax; us >= larguraMin; us -= micropasso) {
-    aplicar(us);
-    delay(esperaMs);
-    registrar("desce");
+    aplicar(us); delay(esperaMs); registrar("desce");
   }
-
-  Serial.println(F("# fim da varredura"));
+  Serial.println(F("# fim"));
 }
 
-void mostrarConfig() {
-  Serial.print(F("# faixa=")); Serial.print(larguraMin);
-  Serial.print(F(".."));       Serial.print(larguraMax);
-  Serial.print(F(" us; micropasso=")); Serial.print(micropasso);
-  Serial.print(F(" us; espera="));     Serial.print(esperaMs);
-  Serial.print(F(" ms; paradas="));
-  Serial.println(2 * ((larguraMax - larguraMin) / micropasso + 1));
-  Serial.print(F("# calibracao: us = "));
-  Serial.print(usEmZeroGrau, 1); Serial.print(F(" + "));
-  Serial.print(usPorGrau, 4);    Serial.println(F(" * graus"));
+// ---------------------------------------------------------------------
+// SERIAL
+// ---------------------------------------------------------------------
+void mostrarEstado() {
+  Serial.println(F("--- estado ---"));
+  Serial.print(F("  faixa marcada: ")); Serial.print(larguraMin);
+  Serial.print(F(" a "));               Serial.print(larguraMax);
+  Serial.print(F(" us   |   pulso atual: ")); Serial.print(larguraAtual);
+  Serial.println(F(" us"));
+  Serial.print(F("  micropasso: "));    Serial.print(micropasso);
+  Serial.print(F(" us   |   espera: ")); Serial.print(esperaMs);
+  Serial.print(F(" ms   |   pontos de calibracao: "));
+  Serial.println(nPares);
+  Serial.print(F("  us = "));  Serial.print(usEmZeroGrau, 1);
+  Serial.print(F(" + "));      Serial.print(usPorGrau, 4);
+  Serial.println(F(" * graus"));
 }
 
-long lerNumero(String& texto) {
-  texto.trim();
-  int espaco = texto.indexOf(' ');
-  String parte = (espaco < 0) ? texto : texto.substring(0, espaco);
-  texto = (espaco < 0) ? "" : texto.substring(espaco + 1);
-  return parte.toInt();
+void mostrarAjuda() {
+  Serial.println(F("=== comandos ==="));
+  Serial.println(F("  C          centraliza em 1500 us"));
+  Serial.println(F("  +  /  -    anda um micropasso para cima / para baixo"));
+  Serial.println(F("  [  /  ]    marca o pulso atual como limite inf / sup"));
+  Serial.println(F("  P <us>     vai para uma largura de pulso"));
+  Serial.println(F("  M <graus>  registra: pulso atual = este angulo medido"));
+  Serial.println(F("  A          ajusta a reta graus->us com os pontos"));
+  Serial.println(F("  Z          apaga os pontos de calibracao"));
+  Serial.println(F("  G <graus>  vai ao angulo usando a calibracao"));
+  Serial.println(F("  V          varredura completa (sobe e desce)"));
+  Serial.println(F("  D <us>     micropasso     T <ms> espera"));
+#if USAR_EEPROM
+  Serial.println(F("  E / R      grava / recarrega da EEPROM"));
+#endif
+  Serial.println(F("  L          solta o servo     ?  estado"));
+}
+
+long lerInteiro(const char* texto) {
+  while (*texto == ' ') texto++;
+  return atol(texto);
+}
+
+float lerDecimal(const char* texto) {
+  while (*texto == ' ') texto++;
+  return atof(texto);
+}
+
+void executar(char* linha) {
+  char comando = toupper(linha[0]);
+  char* argumento = linha + 1;
+
+  switch (comando) {
+    case 'C': aplicar(1500); Serial.println(F("centralizado em 1500 us")); break;
+    case '+': passo(+1); break;
+    case '-': passo(-1); break;
+
+    case '[':
+      larguraMin = larguraAtual;
+      Serial.print(F("limite inferior = ")); Serial.print(larguraMin);
+      Serial.println(F(" us"));
+      break;
+    case ']':
+      larguraMax = larguraAtual;
+      Serial.print(F("limite superior = ")); Serial.print(larguraMax);
+      Serial.println(F(" us"));
+      break;
+
+    case 'P': {
+      int us = lerInteiro(argumento);
+      if (us > 0) { aplicar(us);
+        Serial.print(F("pulso = ")); Serial.print(larguraAtual);
+        Serial.println(F(" us"));
+      }
+      break;
+    }
+    case 'M': registrarPar(lerDecimal(argumento)); break;
+    case 'A': ajustarReta(); break;
+    case 'Z': nPares = 0; Serial.println(F("pontos apagados")); break;
+
+    case 'G': {
+      float graus = lerDecimal(argumento);
+      int alvo = (int)round(usEmZeroGrau + usPorGrau * graus);
+      if (alvo < larguraMin || alvo > larguraMax) {
+        Serial.print(F("! "));      Serial.print(graus, 1);
+        Serial.print(F(" graus daria ")); Serial.print(alvo);
+        Serial.println(F(" us, fora da faixa marcada"));
+        break;
+      }
+      aplicar(alvo);
+      Serial.print(graus, 1);     Serial.print(F(" graus -> "));
+      Serial.print(larguraAtual); Serial.println(F(" us"));
+      break;
+    }
+
+    case 'V': varrer(); break;
+    case 'D': {
+      int valor = lerInteiro(argumento);
+      if (valor > 0) micropasso = valor;
+      mostrarEstado();
+      break;
+    }
+    case 'T': {
+      int valor = lerInteiro(argumento);
+      if (valor > 0) esperaMs = valor;
+      mostrarEstado();
+      break;
+    }
+#if USAR_EEPROM
+    case 'E': gravarEeprom(); break;
+    case 'R':
+      if (lerEeprom()) { Serial.println(F("recarregado da EEPROM"));
+                         mostrarEstado(); }
+      else Serial.println(F("! nao ha calibracao gravada"));
+      break;
+#endif
+    case 'L': servo.detach(); Serial.println(F("servo solto")); break;
+    case '?': mostrarEstado(); break;
+    default:  mostrarAjuda(); break;
+  }
 }
 
 void setup() {
   Serial.begin(9600);
   pinMode(PINO_LED, OUTPUT);
   aplicar(1500);
-  Serial.println(F("# SG90 - caracterizacao por largura de pulso"));
-  Serial.println(F("# comandos: V  P <us>  G <graus>  F <min> <max>  "
-                   "D <us>  T <ms>  L  ?"));
-  mostrarConfig();
+  Serial.println(F("=== SG90: faixa util e calibracao ==="));
+#if USAR_EEPROM
+  if (lerEeprom()) Serial.println(F("calibracao recuperada da EEPROM"));
+#endif
+  mostrarAjuda();
+  mostrarEstado();
+  Serial.println(F("Comece em C, depois - e + para achar os limites. "
+                   "Zumbiu? volte um passo."));
 }
 
 void loop() {
-  if (!Serial.available()) return;
+  // Leitura byte a byte num buffer fixo: sem String, que fragmenta a
+  // memoria do AVR em uso prolongado.
+  static char linha[24];
+  static uint8_t n = 0;
 
-  String linha = Serial.readStringUntil('\n');
-  linha.trim();
-  if (linha.length() == 0) return;
-
-  char comando = toupper(linha.charAt(0));
-  String resto = linha.substring(1);
-
-  switch (comando) {
-    case 'V':
-      varrer();
-      break;
-    case 'P': {
-      int us = lerNumero(resto);
-      aplicar(us);
-      Serial.print(F("# largura = ")); Serial.println(larguraAtual);
-      break;
+  while (Serial.available()) {
+    char caractere = Serial.read();
+    if (caractere == '\n' || caractere == '\r') {
+      if (n > 0) { linha[n] = '\0'; executar(linha); n = 0; }
+    } else if (n < sizeof(linha) - 1) {
+      linha[n++] = caractere;
     }
-    case 'G': {
-      long graus = lerNumero(resto);
-      aplicar((int)round(usEmZeroGrau + usPorGrau * graus));
-      Serial.print(F("# "));      Serial.print(graus);
-      Serial.print(F(" graus -> ")); Serial.print(larguraAtual);
-      Serial.println(F(" us"));
-      break;
-    }
-    case 'F': {
-      int novoMin = lerNumero(resto);
-      int novoMax = lerNumero(resto);
-      if (novoMin > 0 && novoMax > novoMin) {
-        larguraMin = novoMin;
-        larguraMax = novoMax;
-        servo.detach();          // reatacha com a faixa nova
-        aplicar(larguraAtual);
-      }
-      mostrarConfig();
-      break;
-    }
-    case 'D': {
-      int passo = lerNumero(resto);
-      if (passo > 0) micropasso = passo;
-      mostrarConfig();
-      break;
-    }
-    case 'T': {
-      int espera = lerNumero(resto);
-      if (espera > 0) esperaMs = espera;
-      mostrarConfig();
-      break;
-    }
-    case 'L':
-      servo.detach();
-      Serial.println(F("# servo solto"));
-      break;
-    default:
-      mostrarConfig();
-      break;
   }
 }
