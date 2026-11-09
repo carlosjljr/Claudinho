@@ -141,7 +141,8 @@ def gerar_grafico_tensao(tamanhos_malha, dados_series, caminho_saida,
                          rotulo_y="Tensão (Von Mises) [MPa]",
                          simbolo="σ", ignorar_fora_da_curva=False,
                          passo_y=None, passo_y_menor=None,
-                         limitar_aos_dados=False):
+                         limitar_aos_dados=False,
+                         extrapolar_tendencia=True):
     """Tensao x tamanho do elemento, com a tendencia de cada curva.
 
     mostrar_assintota: marca sigma0 (o valor para h -> 0) com um traco
@@ -189,14 +190,15 @@ def gerar_grafico_tensao(tamanhos_malha, dados_series, caminho_saida,
         confiavel = (modelo_tendencia == "potencia"
                      and not parametros.get("p_no_limite")
                      and parametros.get("r2", 0) >= 0.80)
-        inicio = 0.0 if (confiavel and not limitar_aos_dados) else h.min()
+        estende = confiavel and extrapolar_tendencia and not limitar_aos_dados
+        inicio = 0.0 if estende else h.min()
         finos = np.linspace(inicio, h.max(), 300)
         if modelo_tendencia == "log":
             finos = finos[finos > 0]
         eixo.plot(finos, funcao(finos), linestyle="--", color=cor,
                   lw=3.0, alpha=0.40, zorder=1)
 
-        if (mostrar_assintota and confiavel and not limitar_aos_dados
+        if (mostrar_assintota and estende
                 and np.isfinite(parametros.get("sigma0", np.nan))):
             eixo.axhline(parametros["sigma0"], color=cor, linestyle=":",
                          lw=1.0, alpha=0.6)
