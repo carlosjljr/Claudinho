@@ -66,6 +66,12 @@ int micropasso = 5;        // us por toque em + ou -
 int esperaMs = 400;        // parada em cada largura durante a varredura
 int larguraAtual = 1500;
 
+// Caminhada automatica: 0 parada, +1 subindo, -1 descendo.
+int andando = 0;
+unsigned long proximoPasso = 0;
+int esperaCaminhada = 1200;   // ms entre micropassos, tempo de olhar
+int ultimoSentido = +1;       // em que sentido foi o ultimo passo
+
 // Calibracao. Comeca com o padrao da biblioteca, que e justamente o que
 // se quer substituir por medicao.
 float usPorGrau = (2400.0 - 544.0) / 180.0;
@@ -96,13 +102,46 @@ void passo(int sentido) {
     return;
   }
   aplicar(alvo);
+  ultimoSentido = sentido;
   Serial.print(F("pulso = "));
   Serial.print(larguraAtual);
   Serial.print(F(" us   (grau estimado "));
   Serial.print((larguraAtual - usEmZeroGrau) / usPorGrau, 1);
   Serial.println(F(")"));
-  Serial.println(F("  avancou? repita. parou ou zumbiu? volte um passo e "
-                   "marque com [ ou ]"));
+  Serial.println(F("  avancou? deixe seguir. parou ou zumbiu? mande K"));
+}
+
+void pararCaminhada(const char* motivo) {
+  if (andando == 0) return;
+  andando = 0;
+  Serial.print(F("caminhada parada ("));
+  Serial.print(motivo);
+  Serial.print(F(") em "));
+  Serial.print(larguraAtual);
+  Serial.println(F(" us"));
+}
+
+void marcarLimite() {
+  // Marca no sentido do ultimo passo, recuando a margem de seguranca:
+  // quando o braco para de avancar ele JA esta no batente, e deixar o
+  // limite ali significa trabalhar empurrando a trava.
+  pararCaminhada("K");
+  int margem = 2 * micropasso;
+  if (ultimoSentido > 0) {
+    larguraMax = larguraAtual - margem;
+    Serial.print(F("limite SUPERIOR = "));
+    Serial.print(larguraMax);
+  } else {
+    larguraMin = larguraAtual + margem;
+    Serial.print(F("limite INFERIOR = "));
+    Serial.print(larguraMin);
+  }
+  Serial.print(F(" us  (o braco parou em "));
+  Serial.print(larguraAtual);
+  Serial.print(F("; recuei "));
+  Serial.print(margem);
+  Serial.println(F(" us de margem)"));
+  aplicar(ultimoSentido > 0 ? larguraMax : larguraMin);
 }
 
 // ---------------------------------------------------------------------
@@ -261,7 +300,9 @@ void mostrarEstado() {
 void mostrarAjuda() {
   Serial.println(F("=== comandos ==="));
   Serial.println(F("  C          centraliza em 1500 us"));
-  Serial.println(F("  +  /  -    anda um micropasso para cima / para baixo"));
+  Serial.println(F("  +  /  -    anda UM micropasso para cima / para baixo"));
+  Serial.println(F("  W+ / W-    anda sozinho, passo a passo, ate voce mandar K"));
+  Serial.println(F("  K          PARA e marca o limite no sentido em que ia"));
   Serial.println(F("  [  /  ]    marca o pulso atual como limite inf / sup"));
   Serial.println(F("  P <us>     vai para uma largura de pulso"));
   Serial.println(F("  M <graus>  registra: pulso atual = este angulo medido"));
@@ -269,7 +310,8 @@ void mostrarAjuda() {
   Serial.println(F("  Z          apaga os pontos de calibracao"));
   Serial.println(F("  G <graus>  vai ao angulo usando a calibracao"));
   Serial.println(F("  V          varredura completa (sobe e desce)"));
-  Serial.println(F("  D <us>     micropasso     T <ms> espera"));
+  Serial.println(F("  D <us>     micropasso   T <ms> espera da varredura"));
+  Serial.println(F("  I <ms>     intervalo entre passos da caminhada"));
 #if USAR_EEPROM
   Serial.println(F("  E / R      grava / recarrega da EEPROM"));
 #endif
@@ -292,8 +334,28 @@ void executar(char* linha) {
 
   switch (comando) {
     case 'C': aplicar(1500); Serial.println(F("centralizado em 1500 us")); break;
-    case '+': passo(+1); break;
-    case '-': passo(-1); break;
+    case '+': pararCaminhada("comando"); passo(+1); break;
+    case '-': pararCaminhada("comando"); passo(-1); break;
+
+    case 'W': {
+      // Caminhada automatica: um micropasso a cada esperaCaminhada ms,
+      // ate voce mandar K. Entre um passo e outro o loop continua
+      // livre, entao o comando de parada e atendido na hora -- com
+      // delay() dentro de um laco ele so seria lido no fim.
+      char sentido = argumento[0];
+      while (*argumento == ' ') { argumento++; sentido = argumento[0]; }
+      andando = (sentido == '-') ? -1 : +1;
+      proximoPasso = millis();
+      Serial.print(F("andando "));
+      Serial.print(andando > 0 ? F("para cima") : F("para baixo"));
+      Serial.print(F(", um passo de "));
+      Serial.print(micropasso);
+      Serial.print(F(" us a cada "));
+      Serial.print(esperaCaminhada);
+      Serial.println(F(" ms. Mande K quando parar de avancar ou zumbir."));
+      break;
+    }
+    case 'K': marcarLimite(); break;
 
     case '[':
       larguraMin = larguraAtual;
@@ -334,6 +396,12 @@ void executar(char* linha) {
     }
 
     case 'V': varrer(); break;
+    case 'I': {
+      int valor = lerInteiro(argumento);
+      if (valor > 0) esperaCaminhada = valor;
+      mostrarEstado();
+      break;
+    }
     case 'D': {
       int valor = lerInteiro(argumento);
       if (valor > 0) micropasso = valor;
@@ -387,5 +455,17 @@ void loop() {
     } else if (n < sizeof(linha) - 1) {
       linha[n++] = caractere;
     }
+  }
+
+  // A caminhada vive aqui, e nao dentro de um laco com delay(): assim
+  // o K e lido entre um passo e outro, e nao so no fim.
+  if (andando != 0 && (long)(millis() - proximoPasso) >= 0) {
+    int alvo = larguraAtual + andando * micropasso;
+    if (alvo < LIMITE_ABSOLUTO_MIN || alvo > LIMITE_ABSOLUTO_MAX) {
+      pararCaminhada("limite absoluto do sketch");
+      return;
+    }
+    passo(andando);
+    proximoPasso = millis() + esperaCaminhada;
   }
 }
