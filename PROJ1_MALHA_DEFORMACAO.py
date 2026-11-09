@@ -340,7 +340,6 @@ if __name__ == "__main__":
     gerar_grafico_tensao(
         COMPRIMENTO_ARESTA, DEFORMACAO, ARQUIVO_SAIDA,
         escala_y=ESCALA_Y, passo_y=PASSO_Y, passo_y_menor=PASSO_Y_MENOR,
-        limitar_aos_dados=True,
         rotulo_y="Deformação total [mm]",
         simbolo="u",
         mostrar_tendencia=MOSTRAR_TENDENCIA,
