@@ -8,7 +8,7 @@
 # Mesma codificacao visual da figura do artigo, tres canais para nao
 # precisar de uma entrada de legenda por curva:
 #     cor      -> ponto de medicao (1 preto, 2 cinza)
-#     traco    -> gravidade (sem = continuo, com = tracejado)
+#     traco    -> gravidade (com = continuo, sem = tracejado)
 #     marcador -> modelo (MEE03 circulo, MEE10 quadrado)
 #
 # Os dados do MEE03 sao os do poster ("a tensao nos acoplamentos do
@@ -73,7 +73,7 @@ FIGURAS = [
 ROTULO_Y = "Tensão equivalente de Von Mises [MPa]"
 MODELOS = ("MEE03", "MEE10")
 CORES = ("#000000", "0.45")                  # ponto 1, ponto 2
-TRACOS = {"sem gravidade": "-", "com gravidade": "--"}
+TRACOS = {"com gravidade": "-", "sem gravidade": "--"}
 MARCAS = {"MEE03": "o", "MEE10": "s"}
 
 # O rotulo do eixo Y ja e grande o bastante, entao fica menor que o
