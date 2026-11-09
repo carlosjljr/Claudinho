@@ -110,7 +110,12 @@ ELOS = {
 # fator de reducao ate a pagina e pequeno.
 FIG_TAMANHO = (5.6, 4.2)   # polegadas
 ESCALA_FONTE = 1.55        # aumente se ainda ficar pequeno no artigo
-FIG_DPI = 300
+FIG_DPI = 400
+# A figura MOSTRADA no Colab usa figure.dpi, nao savefig.dpi: a 110 ela
+# sai com ~620 px de largura, e e essa imagem borrada que se copia da
+# tela. O arquivo salvo sempre esteve em alta resolucao; o que faltava
+# era a previa. Com 170 a previa ja tem ~950 px.
+FIG_PREVIA_DPI = 170
 FORMATOS = ("png", "pdf")   # PDF e vetorial: e o que o CREEM aceita sem perda
 ZOOM_SEGUNDOS = 1.5
 MARGEM_PRE_COMANDO = 0.15
@@ -122,15 +127,40 @@ def _fonte(base):
     return round(base * ESCALA_FONTE, 1)
 
 
+def legenda(eixo, loc="lower right", ncol=1, fora=False, **extra):
+    """Legenda compacta.
+
+    fora=True joga a legenda para baixo do eixo: ela deixa de disputar
+    espaco com a curva, que e o que acontecia nas figuras de angulo com
+    cinco entradas. Com layout="constrained" a figura se reacomoda
+    sozinha, sem cortar nada.
+    """
+    opcoes = dict(loc=loc, ncol=ncol, handlelength=1.1, handletextpad=0.4,
+                  borderpad=0.3, labelspacing=0.2, columnspacing=0.9,
+                  borderaxespad=0.3, framealpha=0.90, fancybox=False)
+    opcoes.update(extra)
+    if fora:
+        # Tem de ser legenda da FIGURA com loc "outside ...": uma
+        # legenda do eixo ancorada para fora nao e levada em conta pelo
+        # layout e acaba por cima do rotulo do eixo X.
+        alcas, rotulos = eixo.get_legend_handles_labels()
+        opcoes.update(loc="outside lower center", frameon=False,
+                      borderaxespad=0.0)
+        opcoes.pop("borderpad", None)
+        eixo.figure.legend(alcas, rotulos, **opcoes)
+        return
+    eixo.legend(**opcoes)
+
+
 matplotlib.rcParams.update({
     "figure.figsize": FIG_TAMANHO,
-    "figure.dpi": 110,
+    "figure.dpi": FIG_PREVIA_DPI,
     "savefig.dpi": FIG_DPI,
     "savefig.bbox": "tight",
     "font.size": _fonte(11),
     "axes.titlesize": _fonte(11),
     "axes.labelsize": _fonte(11),
-    "legend.fontsize": _fonte(9.5),
+    "legend.fontsize": _fonte(8.0),
     "xtick.labelsize": _fonte(10),
     "ytick.labelsize": _fonte(10),
     "axes.grid": True,
@@ -840,8 +870,8 @@ def rotulos_com_assentamento(grupo, por_degrau):
     """Rotulo de cada curva com o tempo de assentamento embutido.
 
     Em vez de uma caixa separada, o valor entra na propria legenda:
-    "Exp 1 — T_ass = 192 ms". Uma legenda so, sem caixa concorrente,
-    libera a area do grafico.
+    "Exp 1: 192 ms". Uma legenda so, sem caixa concorrente, e rotulos
+    curtos liberam a area do grafico; o titulo diz que e assentamento.
     """
     rotulos = []
     for ensaio in grupo:
@@ -852,7 +882,7 @@ def rotulos_com_assentamento(grupo, por_degrau):
         ]["tempo_assentamento_s"]
         media = meu.mean()
         valor = f"{1000 * media:.0f} ms" if np.isfinite(media) else "n/d"
-        rotulos.append(f"Exp {ensaio['repeticao']} — $T_{{ass}}$ = {valor}")
+        rotulos.append(f"Exp {ensaio['repeticao']}: {valor}")
     return rotulos
 
 
@@ -868,7 +898,7 @@ def plot_xy_solo(grupo):
     eixo.set_xlabel("X (mm) — origem na junta")
     eixo.set_ylabel("Y (mm) — origem na junta")
     eixo.set_title(f"{ref['prototipo']} — {ref['categoria']} (X vs Y)")
-    eixo.legend(loc="best")
+    legenda(eixo, loc="best")
     eixo.set_aspect("equal", adjustable="datalim")
     salvar_figura_traj(fig, "GRAFICO SOLO",
                        f"grafico_{ref['prototipo']}_{ref['categoria']}_XY")
@@ -888,8 +918,7 @@ def plot_xy(grupo, por_degrau):
     eixo.set_xlabel("X (mm) — origem na junta")
     eixo.set_ylabel("Y (mm) — origem na junta")
     eixo.set_title(f"{ref['prototipo']} — {ref['categoria']}")
-    eixo.legend(loc="lower right", handlelength=1.4, borderpad=0.4,
-                labelspacing=0.25, framealpha=0.92)
+    legenda(eixo)
     eixo.set_aspect("equal", adjustable="datalim")
     salvar_figura_traj(fig, "GRAFICOS COMBINADO", f"grafico_combinado_{ref['prototipo']}_{ref['categoria']}")
 
@@ -925,20 +954,19 @@ def plot_angulo(grupo, por_degrau, zoom=None):
                           color="0.6", alpha=0.25, linewidth=0,
                           label=rotulo_faixa if k == 0 else None)
 
-    # A legenda fica no canto inferior direito, entao a folga vai
-    # EMBAIXO: assim ela ocupa area vazia e nao cobre a escada.
+    # Com a legenda fora do quadro, a curva usa a altura inteira: basta
+    # uma folga simetrica pequena.
     juntos = np.concatenate(medidos) if medidos else np.empty(0)
     if juntos.size:
         menor, maior = float(np.min(juntos)), float(np.max(juntos))
         amplitude = max(maior - menor, passo)
-        eixo.set_ylim(menor - 0.18 * amplitude, maior + 0.08 * amplitude)
+        eixo.set_ylim(menor - 0.06 * amplitude, maior + 0.08 * amplitude)
 
     eixo.set_xlabel("Tempo desde o comando (s)")
     eixo.set_ylabel("Deslocamento angular (graus)")
     sufixo = f" — zoom 0–{limite:g} s" if zoom else ""
     eixo.set_title(f"{ref['prototipo']} — {ref['categoria']}{sufixo}")
-    eixo.legend(loc="lower right", handlelength=1.4, borderpad=0.4,
-                labelspacing=0.25, framealpha=0.92)
+    legenda(eixo, ncol=2, fora=True)
     nome = ("angulo_zoom_" if zoom else "angulo_") + f"{ref['prototipo']}_{ref['categoria']}"
     salvar_figura_traj(fig, "GRAFICO DE ANGULOS COM ZOOM" if zoom else "GRAFICO ANGULOS COMBINADOS", nome)
 
@@ -964,7 +992,7 @@ def plot_media(grupo, por_degrau):
     sup.plot(grade, comando, "k--", linewidth=1.6, label="Comando")
     sup.set_ylabel("Deslocamento angular (graus)")
     sup.set_title(f"{ref['prototipo']} — {ref['categoria']}")
-    sup.legend(loc="upper left")
+    legenda(sup, loc="upper left")
     inf.plot(grade, media - comando, color="tab:red")
     inf.axhline(0.0, color="k", linewidth=0.8)
     inf.set_xlabel("Tempo desde o comando (s)")
@@ -996,7 +1024,7 @@ def plot_assentamento(grupo, por_degrau):
     eixo.set_ylabel("Tempo de assentamento (ms)")
     eixo.set_title(f"{ref['prototipo']} — {ref['categoria']} "
                    f"(±{100*BANDA_ASSENTAMENTO:.0f}% {BANDA_MODO})")
-    eixo.legend(loc="best")
+    legenda(eixo, loc="best")
     salvar_figura_traj(fig, "TEMPO DE ASSENTAMENTO", f"assentamento_{ref['prototipo']}_{ref['categoria']}")
 
 
@@ -1058,7 +1086,7 @@ def plot_degraus_sobrepostos(grupo, por_degrau):
     eixo.set_ylabel("Avanço / passo comandado")
     eixo.set_title(f"{ref['prototipo']} — {ref['categoria']} "
                    f"(passo de {passo:.0f}°)")
-    eixo.legend(loc="lower right")
+    legenda(eixo)
     salvar_figura_traj(fig, "DEGRAUS SOBREPOSTOS",
                        f"degraus_{ref['prototipo']}_{ref['categoria']}")
 
@@ -1091,7 +1119,7 @@ def plot_ganho(grupo, por_degrau):
     eixo.set_xlabel("Ângulo comandado (graus)")
     eixo.set_ylabel("Ângulo medido (graus)")
     eixo.set_title(f"{ref['prototipo']} — {ref['categoria']}")
-    eixo.legend(loc="upper left")
+    legenda(eixo, loc="upper left")
     salvar_figura_traj(fig, "GANHO DO SERVO",
                        f"ganho_{ref['prototipo']}_{ref['categoria']}")
 
@@ -1127,7 +1155,7 @@ def plot_assentamento_por_passo(por_degrau):
     eixo.set_ylabel("Tempo de assentamento (ms)")
     eixo.set_title(f"Mediana de todos os degraus "
                    f"(±{100*BANDA_ASSENTAMENTO:.0f}% do passo)")
-    eixo.legend(loc="best", ncol=2)
+    legenda(eixo, loc="best", ncol=2)
     salvar_figura_traj(fig, "TEMPO DE ASSENTAMENTO", "assentamento_por_passo")
 
 
@@ -1187,7 +1215,7 @@ def plot_comparacao_prototipos(resumo):
     eixo.set_xticklabels(tabela.index, rotation=30, ha="right")
     eixo.set_ylabel("Tempo de assentamento médio (ms)")
     eixo.set_title("Comparação entre protótipos (±5% do passo)")
-    eixo.legend(loc="best")
+    legenda(eixo, loc="best")
     salvar_figura_traj(fig, "TEMPO DE ASSENTAMENTO", "comparacao_prototipos_assentamento")
 
 
