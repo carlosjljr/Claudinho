@@ -11,9 +11,11 @@
 #     traco    -> gravidade (sem = continuo, com = tracejado)
 #     marcador -> modelo (MEE03 circulo, MEE10 quadrado)
 #
-# ATENCAO: so ha dados de tensao do MEE10 (as series que estavam como
-# "VER 10"). Os campos do MEE03 estao vazios; e so preencher com as
-# cinco leituras que a figura passa a mostrar os circulos tambem.
+# Os dados do MEE03 sao os do poster ("a tensao nos acoplamentos do
+# MEE03 vai de 19,6 a 46,4 MPa"); os do MEE10, os da "Versao Final"
+# ("fica entre 21,3 e 38,3 MPa"). As series do comando rotulado
+# "VER 10" nao batem com nenhum dos dois -- sao de uma versao
+# intermediaria -- e por isso ficaram de fora.
 # =====================================================================
 import numpy as np
 import matplotlib.pyplot as plt
@@ -23,31 +25,43 @@ import matplotlib.pyplot as plt
 # ---------------------------------------------------------------------
 ELEMENTOS = [0.2, 0.4, 0.8, 1.0, 1.5]        # milhoes de elementos
 
-# Pontos do SG (antigos ENG 1 e ENG 2)
+# Acoplamentos das engrenagens (antigos ENG 1 e ENG 2)
 SG = {
-    ("MEE03", "sem gravidade"): {"SG 1": None, "SG 2": None},
-    ("MEE03", "com gravidade"): {"SG 1": None, "SG 2": None},
+    ("MEE03", "sem gravidade"): {
+        "SG 1": [18.705, 24.235, 20.665, 21.556, 33.037],
+        "SG 2": [20.664, 25.456, 31.147, 37.697, 28.234],
+    },
+    ("MEE03", "com gravidade"): {
+        "SG 1": [19.593, 34.305, 30.590, 41.674, 46.414],
+        "SG 2": [39.035, 26.362, 32.050, 34.209, 34.339],
+    },
     ("MEE10", "sem gravidade"): {
-        "SG 1": [27.387, 33.240, 42.276, 39.454, 67.500],
-        "SG 2": [42.562, 45.992, 48.320, 45.291, 67.262],
+        "SG 1": [20.620, 20.714, 27.261, 26.865, 36.095],
+        "SG 2": [31.449, 27.110, 29.392, 32.622, 32.093],
     },
     ("MEE10", "com gravidade"): {
-        "SG 1": [28.737, 34.772, 39.596, 39.995, 76.055],
-        "SG 2": [41.688, 41.297, 45.495, 45.822, 70.231],
+        "SG 1": [21.335, 21.435, 28.325, 28.277, 38.338],
+        "SG 2": [33.003, 28.083, 31.020, 34.671, 34.031],
     },
 }
 
-# Pontos do potenciometro
+# Pre-cargas nos potenciometros
 POT = {
-    ("MEE03", "sem gravidade"): {"POT 1": None, "POT 2": None},
-    ("MEE03", "com gravidade"): {"POT 1": None, "POT 2": None},
+    ("MEE03", "sem gravidade"): {
+        "POT 1": [59.017, 110.560, 71.225, 105.530, 159.450],
+        "POT 2": [89.519, 71.908, 23.485, 91.556, 143.450],
+    },
+    ("MEE03", "com gravidade"): {
+        "POT 1": [61.961, 115.390, 74.867, 109.560, 160.120],
+        "POT 2": [124.040, 95.886, 17.024, 71.411, 99.586],
+    },
     ("MEE10", "sem gravidade"): {
-        "POT 1": [12.418, 8.6097, 22.686, 10.043, 27.075],
-        "POT 2": [6.0130, 10.239, 11.401, 11.768, 7.7621],
+        "POT 1": [33.319, 26.164, 30.679, 35.443, 20.943],
+        "POT 2": [117.700, 31.508, 112.830, 89.020, 116.010],
     },
     ("MEE10", "com gravidade"): {
-        "POT 1": [10.197, 15.554, 12.373, 12.966, 14.560],
-        "POT 2": [9.2122, 7.5657, 7.0929, 8.1407, 8.9756],
+        "POT 1": [36.400, 25.670, 35.133, 33.606, 21.692],
+        "POT 2": [121.240, 36.767, 114.550, 97.281, 145.230],
     },
 }
 
@@ -135,6 +149,15 @@ def tabela(dados, pontos, titulo):
     print("  Variação alta no último refino significa que a tensão ainda "
           "depende da\n  malha naquele ponto, então o valor absoluto não "
           "pode ser reportado.")
+
+    print("\n  Acréscimo da gravidade, malha a malha:")
+    for modelo in MODELOS:
+        for ponto in pontos:
+            com = np.asarray(dados[(modelo, "com gravidade")][ponto], float)
+            sem = np.asarray(dados[(modelo, "sem gravidade")][ponto], float)
+            efeito = 100.0 * (com - sem) / sem
+            print(f"    {modelo} {ponto}: de {efeito.min():+.1f}% a "
+                  f"{efeito.max():+.1f}%")
 
 
 # ---------------------------------------------------------------------
