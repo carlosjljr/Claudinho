@@ -323,30 +323,22 @@ def figura_radar(tabela):
 def figura_medido_x_comandado(tabela):
     """Alternativa ao radar: angulo medido x comandado, com o ideal.
 
-    O radar e bonito mas exige seguir 25 espetos para ler uma tendencia.
-    Aqui a mesma informacao cabe num quadro: a reta de 45 graus e o
-    comportamento ideal, e a inclinacao de cada serie e o quanto o
-    atuador entrega por grau pedido. A distancia vertical ate a reta e o
-    erro, e da para ver que ele CRESCE com o alvo -- assinatura de
-    ganho, nao de dispersao.
+    O radar e bonito mas exige seguir 25 espetos para ler uma
+    tendencia. Aqui a mesma informacao cabe num quadro: a distancia
+    vertical de cada ponto ate a reta de 45 graus e o erro, e a
+    dispersao de cada grupo e a repetibilidade.
     """
     nomes = list(tabela["prototipo"].unique())
     fig, eixo = plt.subplots(figsize=FIG_TAMANHO, layout="constrained")
-    eixo.plot([-5, 190], [-5, 190], "k--", lw=1.3, label="Ideal (ganho 1)")
+    eixo.plot([-5, 190], [-5, 190], "k--", lw=1.3, label="Ideal (medido = comandado)")
     marcas = {1: "o", 2: "s"}
     for nome, cor in zip(nomes, ("tab:blue", "tab:orange")):
         bloco = tabela[tabela["prototipo"] == nome]
         for atuador, marca in marcas.items():
-            alvo = bloco[f"theta{atuador}_alvo"].to_numpy(float)
-            medido = bloco[f"theta{atuador}_medido"].to_numpy(float)
-            ganho, offset = np.polyfit(alvo, medido, 1)
-            eixo.plot(alvo, medido, marca, color=cor, ms=4, alpha=0.7,
-                      markerfacecolor="none")
-            eixo.plot([0, 180], [offset, 180 * ganho + offset], "-",
-                      color=cor, lw=1.4,
-                      ls="-" if atuador == 1 else "--",
-                      label=f"{nome} — atuador {atuador} "
-                            f"(ganho {ganho:.3f})")
+            eixo.plot(bloco[f"theta{atuador}_alvo"],
+                      bloco[f"theta{atuador}_medido"], marca, color=cor,
+                      ms=5, alpha=0.75, markerfacecolor="none",
+                      label=f"{nome} — atuador {atuador}")
     eixo.set_xlabel("Ângulo comandado (graus)")
     eixo.set_ylabel("Ângulo medido (graus)")
     eixo.set_xticks(ALVOS)
@@ -400,21 +392,35 @@ def figura_grade_deformada(tabela):
                           bbox=dict(boxstyle="round,pad=0.10", fc="white",
                                     ec="none", alpha=0.8), zorder=5)
         # O braco inteiro em alguns pontos: sem ele a figura mostra so
-        # onde a ponta chegou, e nao a postura que levou ate la. Um por
-        # nivel de theta1, para nao poluir.
+        # onde a ponta chegou, e nao a postura que levou ate la. E
+        # desenhado na posicao COMANDADA, entao o membro 1 sai da junta
+        # e o membro 2 termina no ponto desejado. Um por nivel de
+        # theta1, para nao poluir.
         L1, _ = PROTOTIPOS[nome]["L"]
         for numero in POSES:
             linha = bloco.iloc[numero - 1]
-            cotovelo = (L1 * np.cos(np.deg2rad(linha["theta1_medido"])),
-                        L1 * np.sin(np.deg2rad(linha["theta1_medido"])))
-            eixo.plot([0, cotovelo[0], linha["x_medido"]],
-                      [0, cotovelo[1], linha["y_medido"]],
-                      "-", color="tab:red", lw=1.6, alpha=0.65, zorder=2,
+            cotovelo = (L1 * np.cos(np.deg2rad(linha["theta1_alvo"])),
+                        L1 * np.sin(np.deg2rad(linha["theta1_alvo"])))
+            eixo.plot([0, cotovelo[0], linha["x_alvo"]],
+                      [0, cotovelo[1], linha["y_alvo"]],
+                      "-", color="tab:red", lw=1.6, alpha=0.6, zorder=2,
                       solid_capstyle="round")
-            eixo.plot(*cotovelo, "o", color="tab:red", ms=4, alpha=0.65,
+            eixo.plot(*cotovelo, "o", color="tab:red", ms=4, alpha=0.6,
                       zorder=2)
-        eixo.plot([], [], "-", color="tab:red", lw=1.6, alpha=0.65,
-                  label=f"Braço nos pontos {', '.join(map(str, POSES))}")
+
+            # Nome de cada membro escrito sobre o proprio segmento, na
+            # inclinacao dele: dispensa entrada de legenda.
+            for texto, (xa, ya), (xb, yb) in (
+                    ("Membro 1", (0.0, 0.0), cotovelo),
+                    ("Membro 2", cotovelo, (linha["x_alvo"], linha["y_alvo"]))):
+                giro = np.degrees(np.arctan2(yb - ya, xb - xa))
+                giro = (giro + 90) % 180 - 90        # texto nunca de cabeca
+                eixo.text(0.5 * (xa + xb), 0.5 * (ya + yb), texto,
+                          rotation=giro, rotation_mode="anchor",
+                          ha="center", va="center", fontsize=5.5,
+                          color="tab:red", zorder=6,
+                          bbox=dict(boxstyle="round,pad=0.08", fc="white",
+                                    ec="none", alpha=0.75))
 
         eixo.plot(0, 0, "k+", ms=10)
         eixo.set_aspect("equal", adjustable="datalim")
