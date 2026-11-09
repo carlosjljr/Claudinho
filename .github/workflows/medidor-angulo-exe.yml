@@ -1,0 +1,39 @@
+name: Gerar o medidor de ângulo (.exe)
+
+# O PyInstaller NAO faz compilacao cruzada: ele empacota para o sistema
+# onde roda. Por isso o .exe tem de ser gerado numa maquina Windows --
+# aqui, a maquina Windows gratuita do GitHub. Basta abrir a aba Actions
+# do repositorio e clicar em "Run workflow"; o .exe sai em Artifacts.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "ferramentas/medidor_angulo.py"
+      - ".github/workflows/medidor-angulo-exe.yml"
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar o PyInstaller
+        run: python -m pip install --upgrade pip pyinstaller
+
+      - name: Conferir a geometria antes de empacotar
+        run: python ferramentas/test_medidor_angulo.py
+
+      - name: Gerar o executável
+        run: >
+          pyinstaller --onefile --windowed --name MedidorAngulo
+          ferramentas/medidor_angulo.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MedidorAngulo-windows
+          path: dist/MedidorAngulo.exe
+          if-no-files-found: error
