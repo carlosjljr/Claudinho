@@ -110,6 +110,10 @@ ELOS = {
 # fator de reducao ate a pagina e pequeno.
 FIG_TAMANHO = (5.6, 4.2)   # polegadas
 ESCALA_FONTE = 1.55        # aumente se ainda ficar pequeno no artigo
+# Fonte da legenda, em "pontos base" (antes de ESCALA_FONTE). Ela nao
+# acompanha a dos eixos: a legenda e apoio, e a caixa compete com a
+# curva pela area do grafico. Diminua aqui se ainda ocupar espaco.
+ESCALA_LEGENDA = 7.5
 FIG_DPI = 400
 # A figura MOSTRADA no Colab usa figure.dpi, nao savefig.dpi: a 110 ela
 # sai com ~620 px de largura, e e essa imagem borrada que se copia da
@@ -127,28 +131,18 @@ def _fonte(base):
     return round(base * ESCALA_FONTE, 1)
 
 
-def legenda(eixo, loc="lower right", ncol=1, fora=False, **extra):
-    """Legenda compacta.
+def legenda(eixo, loc="lower right", ncol=1, **extra):
+    """Legenda compacta, sempre DENTRO do quadro.
 
-    fora=True joga a legenda para baixo do eixo: ela deixa de disputar
-    espaco com a curva, que e o que acontecia nas figuras de angulo com
-    cinco entradas. Com layout="constrained" a figura se reacomoda
-    sozinha, sem cortar nada.
+    Cada figura mantem a posicao que ja funcionava; o que encolhe e a
+    caixa, por tres caminhos: fonte menor (ESCALA_LEGENDA), tracinho de
+    amostra curto e espacamentos internos apertados.
     """
-    opcoes = dict(loc=loc, ncol=ncol, handlelength=1.1, handletextpad=0.4,
-                  borderpad=0.3, labelspacing=0.2, columnspacing=0.9,
-                  borderaxespad=0.3, framealpha=0.90, fancybox=False)
+    opcoes = dict(loc=loc, ncol=ncol, fontsize=_fonte(ESCALA_LEGENDA),
+                  handlelength=1.1, handletextpad=0.4, borderpad=0.3,
+                  labelspacing=0.2, columnspacing=0.9, borderaxespad=0.3,
+                  framealpha=0.90, fancybox=False)
     opcoes.update(extra)
-    if fora:
-        # Tem de ser legenda da FIGURA com loc "outside ...": uma
-        # legenda do eixo ancorada para fora nao e levada em conta pelo
-        # layout e acaba por cima do rotulo do eixo X.
-        alcas, rotulos = eixo.get_legend_handles_labels()
-        opcoes.update(loc="outside lower center", frameon=False,
-                      borderaxespad=0.0)
-        opcoes.pop("borderpad", None)
-        eixo.figure.legend(alcas, rotulos, **opcoes)
-        return
     eixo.legend(**opcoes)
 
 
@@ -160,7 +154,7 @@ matplotlib.rcParams.update({
     "font.size": _fonte(11),
     "axes.titlesize": _fonte(11),
     "axes.labelsize": _fonte(11),
-    "legend.fontsize": _fonte(8.0),
+    "legend.fontsize": _fonte(ESCALA_LEGENDA),
     "xtick.labelsize": _fonte(10),
     "ytick.labelsize": _fonte(10),
     "axes.grid": True,
@@ -918,7 +912,9 @@ def plot_xy(grupo, por_degrau):
     eixo.set_xlabel("X (mm) — origem na junta")
     eixo.set_ylabel("Y (mm) — origem na junta")
     eixo.set_title(f"{ref['prototipo']} — {ref['categoria']}")
-    legenda(eixo)
+    # O arco deixa o meio do quadro livre: a legenda cabe ali sem cobrir
+    # nada, como na figura sem a curva desejada.
+    legenda(eixo, loc="center")
     eixo.set_aspect("equal", adjustable="datalim")
     salvar_figura_traj(fig, "GRAFICOS COMBINADO", f"grafico_combinado_{ref['prototipo']}_{ref['categoria']}")
 
@@ -954,19 +950,19 @@ def plot_angulo(grupo, por_degrau, zoom=None):
                           color="0.6", alpha=0.25, linewidth=0,
                           label=rotulo_faixa if k == 0 else None)
 
-    # Com a legenda fora do quadro, a curva usa a altura inteira: basta
-    # uma folga simetrica pequena.
+    # A legenda fica no canto inferior direito, entao a folga vai
+    # EMBAIXO: assim ela ocupa area vazia e nao cobre a escada.
     juntos = np.concatenate(medidos) if medidos else np.empty(0)
     if juntos.size:
         menor, maior = float(np.min(juntos)), float(np.max(juntos))
         amplitude = max(maior - menor, passo)
-        eixo.set_ylim(menor - 0.06 * amplitude, maior + 0.08 * amplitude)
+        eixo.set_ylim(menor - 0.18 * amplitude, maior + 0.08 * amplitude)
 
     eixo.set_xlabel("Tempo desde o comando (s)")
     eixo.set_ylabel("Deslocamento angular (graus)")
     sufixo = f" — zoom 0–{limite:g} s" if zoom else ""
     eixo.set_title(f"{ref['prototipo']} — {ref['categoria']}{sufixo}")
-    legenda(eixo, ncol=2, fora=True)
+    legenda(eixo)
     nome = ("angulo_zoom_" if zoom else "angulo_") + f"{ref['prototipo']}_{ref['categoria']}"
     salvar_figura_traj(fig, "GRAFICO DE ANGULOS COM ZOOM" if zoom else "GRAFICO ANGULOS COMBINADOS", nome)
 
