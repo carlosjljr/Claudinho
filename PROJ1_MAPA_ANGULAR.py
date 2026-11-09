@@ -45,6 +45,10 @@ PROTOTIPOS = {
 # teste de consistencia. Deixe None para pular a verificacao.
 RAIO_FILMAGEM = {"PE01": 306.32, "PE02": 231.59}
 
+# Pontos da malha em que o braco e desenhado por inteiro na figura
+# cartesiana (um por nivel de theta1, com theta2 = 0).
+POSES = (1, 6, 11, 16, 21)
+
 PASTA_SAIDA = "/content/drive/MyDrive/CTG_UFPE/PROJETOS/PROJ 1/RESULTADOS"
 FORMATOS = ("png", "pdf")
 FIG_TAMANHO = (7.0, 4.5)
@@ -246,20 +250,6 @@ def figura_erro_angular(tabela, repet):
     salvar_figura_mapa(fig, "mapa_angular_erro_atuador2")
 
 
-def figura_erro_cartesiano(tabela):
-    """Erro de posicao do efetuador, ponto a ponto."""
-    fig, eixo = plt.subplots(figsize=FIG_TAMANHO, layout="constrained")
-    for nome in tabela["prototipo"].unique():
-        bloco = tabela[tabela["prototipo"] == nome]
-        eixo.plot(bloco["theta2_alvo"], bloco["erro_cartesiano_mm"], "o",
-                  markersize=4, alpha=0.75, label=nome)
-    eixo.set_xlabel("Posição comandada do atuador 2 (graus)")
-    eixo.set_ylabel("Erro cartesiano (mm)")
-    eixo.set_xticks(ALVOS)
-    eixo.legend(loc="best")
-    salvar_figura_mapa(fig, "mapa_angular_erro_cartesiano")
-
-
 def figura_radar(tabela):
     """Mapa angular: os dois atuadores e as duas bancadas num grafico.
 
@@ -330,6 +320,40 @@ def figura_radar(tabela):
     salvar_figura_mapa(fig, "mapa_angular_radar")
 
 
+def figura_medido_x_comandado(tabela):
+    """Alternativa ao radar: angulo medido x comandado, com o ideal.
+
+    O radar e bonito mas exige seguir 25 espetos para ler uma tendencia.
+    Aqui a mesma informacao cabe num quadro: a reta de 45 graus e o
+    comportamento ideal, e a inclinacao de cada serie e o quanto o
+    atuador entrega por grau pedido. A distancia vertical ate a reta e o
+    erro, e da para ver que ele CRESCE com o alvo -- assinatura de
+    ganho, nao de dispersao.
+    """
+    nomes = list(tabela["prototipo"].unique())
+    fig, eixo = plt.subplots(figsize=FIG_TAMANHO, layout="constrained")
+    eixo.plot([-5, 190], [-5, 190], "k--", lw=1.3, label="Ideal (ganho 1)")
+    marcas = {1: "o", 2: "s"}
+    for nome, cor in zip(nomes, ("tab:blue", "tab:orange")):
+        bloco = tabela[tabela["prototipo"] == nome]
+        for atuador, marca in marcas.items():
+            alvo = bloco[f"theta{atuador}_alvo"].to_numpy(float)
+            medido = bloco[f"theta{atuador}_medido"].to_numpy(float)
+            ganho, offset = np.polyfit(alvo, medido, 1)
+            eixo.plot(alvo, medido, marca, color=cor, ms=4, alpha=0.7,
+                      markerfacecolor="none")
+            eixo.plot([0, 180], [offset, 180 * ganho + offset], "-",
+                      color=cor, lw=1.4,
+                      ls="-" if atuador == 1 else "--",
+                      label=f"{nome} — atuador {atuador} "
+                            f"(ganho {ganho:.3f})")
+    eixo.set_xlabel("Ângulo comandado (graus)")
+    eixo.set_ylabel("Ângulo medido (graus)")
+    eixo.set_xticks(ALVOS)
+    eixo.legend(loc="upper left", fontsize=8.5)
+    salvar_figura_mapa(fig, "mapa_angular_medido_x_comandado")
+
+
 def figura_grade_deformada(tabela):
     """Malha 5x5 comandada x medida, no plano de trabalho.
 
@@ -375,6 +399,23 @@ def figura_grade_deformada(tabela):
                           ha="center", va="center", fontsize=6.5, color="0.25",
                           bbox=dict(boxstyle="round,pad=0.10", fc="white",
                                     ec="none", alpha=0.8), zorder=5)
+        # O braco inteiro em alguns pontos: sem ele a figura mostra so
+        # onde a ponta chegou, e nao a postura que levou ate la. Um por
+        # nivel de theta1, para nao poluir.
+        L1, _ = PROTOTIPOS[nome]["L"]
+        for numero in POSES:
+            linha = bloco.iloc[numero - 1]
+            cotovelo = (L1 * np.cos(np.deg2rad(linha["theta1_medido"])),
+                        L1 * np.sin(np.deg2rad(linha["theta1_medido"])))
+            eixo.plot([0, cotovelo[0], linha["x_medido"]],
+                      [0, cotovelo[1], linha["y_medido"]],
+                      "-", color="tab:red", lw=1.6, alpha=0.65, zorder=2,
+                      solid_capstyle="round")
+            eixo.plot(*cotovelo, "o", color="tab:red", ms=4, alpha=0.65,
+                      zorder=2)
+        eixo.plot([], [], "-", color="tab:red", lw=1.6, alpha=0.65,
+                  label=f"Braço nos pontos {', '.join(map(str, POSES))}")
+
         eixo.plot(0, 0, "k+", ms=10)
         eixo.set_aspect("equal", adjustable="datalim")
         eixo.set_xlabel("X (mm)")
@@ -382,7 +423,9 @@ def figura_grade_deformada(tabela):
         erro = bloco["erro_cartesiano_mm"]
         eixo.set_title(f"{nome} — erro médio {erro.mean():.1f} mm "
                        f"(máx. {erro.max():.1f} mm)")
-        eixo.legend(loc="best", fontsize=9)
+        # "best" punha a caixa em cima do braço desenhado; embaixo, ao
+        # centro, fica a unica regiao que a malha nao ocupa.
+        eixo.legend(loc="lower center", fontsize=8.5, framealpha=0.9)
     salvar_figura_mapa(fig, "mapa_angular_grade")
 
 
@@ -446,9 +489,9 @@ def executar_mapa_angular():
                   f"{linha['residuo_rms_graus']:.2f}° RMS.")
 
     figura_radar(tabela)
+    figura_medido_x_comandado(tabela)
     figura_grade_deformada(tabela)
     figura_erro_angular(tabela, repet)
-    figura_erro_cartesiano(tabela)
     conferir_comprimentos()
 
     os.makedirs(PASTA_SAIDA, exist_ok=True)
