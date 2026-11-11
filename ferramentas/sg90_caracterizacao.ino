@@ -99,6 +99,7 @@ const unsigned long ANTIRRUIDO_MS = 40;
 const int LIMITE_ABSOLUTO_MIN = 400;
 const int LIMITE_ABSOLUTO_MAX = 2600;
 const int PULSO_SEGURO = 1500;         // meio do curso
+const unsigned long PAUSA_COMANDO_MS = 80;  // silencio que fecha a linha
 const uint8_t MAX_PARES = 12;          // pontos de calibracao guardados
 
 int larguraMin = 1000;     // faixa de trabalho, estreita ate ser medida
@@ -636,14 +637,29 @@ void loop() {
   // memoria do AVR em uso prolongado.
   static char linha[24];
   static uint8_t n = 0;
+  static unsigned long ultimoByte = 0;
 
   while (Serial.available()) {
     char caractere = Serial.read();
+    ultimoByte = millis();
     if (caractere == '\n' || caractere == '\r') {
       if (n > 0) { linha[n] = '\0'; executar(linha); n = 0; }
     } else if (n < sizeof(linha) - 1) {
       linha[n++] = caractere;
     }
+  }
+
+  // Executa tambem sem terminador, depois de uma pausa curta na
+  // chegada dos bytes. Nem todo monitor serial acrescenta \n ao enviar:
+  // o da IDE depende do seletor "Nova linha", e outros nao tem seletor
+  // nenhum. Esperando so pelo \n, o comando digitado ficaria no buffer
+  // para sempre e o programa pareceria surdo. Os bytes de um envio
+  // chegam em rajada, entao PAUSA_COMANDO_MS de silencio significa que
+  // a linha acabou.
+  if (n > 0 && (millis() - ultimoByte) >= PAUSA_COMANDO_MS) {
+    linha[n] = '\0';
+    executar(linha);
+    n = 0;
   }
 
   // O avanco vive aqui, e nao num laco com delay(): assim o P e lido
