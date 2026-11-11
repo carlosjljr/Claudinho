@@ -69,6 +69,17 @@
 // =====================================================================
 #define USAR_EEPROM 1
 
+// Botoes fisicos em paralelo com a serial: A, P e F tambem acontecem
+// apertando um botao. Duas razoes:
+//   1. o monitor serial do TinkerCad pode nao ter campo de envio, e sem
+//      ele a busca nao poderia ser conduzida ali;
+//   2. na bancada, a mao fica no botao e o olho no braco -- digitar no
+//      teclado enquanto se observa o braco e justamente o que faz
+//      passar do ponto.
+// Ligue cada botao entre o pino e o GND; o pull-up interno cuida do
+// resto. Para desligar, troque por 0.
+#define USAR_BOTOES 1
+
 #include <Servo.h>
 #if USAR_EEPROM
 #include <EEPROM.h>
@@ -76,6 +87,12 @@
 
 const uint8_t PINO_SERVO = 9;
 const uint8_t PINO_LED = LED_BUILTIN;
+#if USAR_BOTOES
+const uint8_t PINO_BOTAO_A = 2;   // avanca
+const uint8_t PINO_BOTAO_P = 3;   // pausa
+const uint8_t PINO_BOTAO_F = 4;   // fecha o lado
+const unsigned long ANTIRRUIDO_MS = 40;
+#endif
 
 // Nenhum comando passa daqui, em nenhuma circunstancia. E a trava que
 // impede uma busca distraida de levar o servo muito alem do batente.
@@ -553,9 +570,43 @@ void executar(char* linha) {
   }
 }
 
+#if USAR_BOTOES
+// Le os tres botoes e dispara a mesma acao do comando digitado. Sem
+// delay(): um delay aqui travaria o avanco entre os passos.
+void lerBotoes() {
+  static const uint8_t pinos[3] = {PINO_BOTAO_A, PINO_BOTAO_P, PINO_BOTAO_F};
+  static bool anterior[3] = {true, true, true};      // pull-up: solto = HIGH
+  static unsigned long ultimaMudanca[3] = {0, 0, 0};
+
+  for (uint8_t i = 0; i < 3; i++) {
+    bool agora = digitalRead(pinos[i]);
+    if (agora != anterior[i]) {
+      // So aceita a mudanca depois de ANTIRRUIDO_MS estavel: o contato
+      // mecanico repica e um unico toque viraria varios comandos.
+      if (millis() - ultimaMudanca[i] >= ANTIRRUIDO_MS) {
+        ultimaMudanca[i] = millis();
+        anterior[i] = agora;
+        if (!agora) {                                 // apertou
+          if (i == 0) avancar();
+          else if (i == 1) pausar(true);
+          else finalizar();
+        }
+      }
+    } else {
+      ultimaMudanca[i] = millis();
+    }
+  }
+}
+#endif
+
 void setup() {
   Serial.begin(9600);
   pinMode(PINO_LED, OUTPUT);
+#if USAR_BOTOES
+  pinMode(PINO_BOTAO_A, INPUT_PULLUP);
+  pinMode(PINO_BOTAO_P, INPUT_PULLUP);
+  pinMode(PINO_BOTAO_F, INPUT_PULLUP);
+#endif
   // Primeiro pulso no MEIO do curso: qualquer outro valor faria o braco
   // atravessar o curso de uma vez, sem aviso, ao ligar.
   aplicar(PULSO_SEGURO);
@@ -567,12 +618,20 @@ void setup() {
   }
 #endif
   mostrarAjuda();
+#if USAR_BOTOES
+  Serial.println(F("Botoes: pino 2 = A, pino 3 = P, pino 4 = F "
+                   "(cada um entre o pino e o GND)"));
+#endif
   mostrarEstado();
-  Serial.println(F("Braco no meio do curso. Mande A para comecar a "
-                   "procurar o limite de baixo."));
+  Serial.println(F("Braco no meio do curso. Mande A (ou aperte o botao) "
+                   "para procurar o limite de baixo."));
 }
 
 void loop() {
+#if USAR_BOTOES
+  lerBotoes();
+#endif
+
   // Leitura byte a byte num buffer fixo: sem String, que fragmenta a
   // memoria do AVR em uso prolongado.
   static char linha[24];
