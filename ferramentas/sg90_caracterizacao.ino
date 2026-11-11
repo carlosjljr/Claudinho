@@ -4,22 +4,35 @@
 // Acha a faixa util do servo, calibra graus -> microssegundos e passa a
 // posicionar pela calibracao medida. Nao precisa de Python.
 //
-// POR QUE NAO Servo.write(graus)
-// A biblioteca Servo converte 0..180 graus para 544..2400 us. Essa
-// faixa e uma convencao da biblioteca, NAO do SG90. Como cada servo tem
-// a sua, a diferenca aparece como erro de ganho: o braco entrega menos
-// grau do que foi pedido. Aqui tudo e comandado em microssegundos e a
-// conversao graus->us e MEDIDA.
+// COMO O SERVO RESPONDE AO PULSO  (leia antes de rodar)
+// O SG90 e um servo de POSICAO, nao de passo. Cada largura de pulso
+// corresponde a uma posicao ABSOLUTA do braco, e ele vai para la
+// sozinho, pelo caminho mais curto, na velocidade que conseguir:
+//
+//     ~500 us   ---->  um extremo do curso  (chame de 0 graus)
+//     ~1500 us  ---->  o meio               (~90 graus)
+//     ~2500 us  ---->  o outro extremo      (~180 graus)
+//
+// Entao o braco NAO "comeca em zero e sobe". Ele comeca onde o PRIMEIRO
+// pulso mandar. Se o sketch acordasse ja enviando 500 us, o braco
+// atravessaria o curso inteiro de uma vez e bateria no batente -- por
+// isso o primeiro pulso aqui e 1500 us, o meio, que e sempre seguro.
+//
+// O que a varredura de micropassos faz e percorrer essa escala devagar,
+// parando em cada largura, para medir QUAL angulo corresponde a QUAL
+// largura. A escala existe desde o inicio; o que nao se conhece ainda e
+// onde ela comeca, onde termina, e quantos graus cabem em cada
+// microssegundo.
+//
+// Fora dos extremos o braco nao tem para onde ir: encosta no batente
+// interno e o servo continua empurrando, puxando corrente e zumbindo.
+// ZUMBIDO COM O BRACO PARADO = passou do limite. Recue.
 //
 // O SKETCH NAO ENXERGA O BRACO
 // Malha aberta: nao ha realimentacao. Ele nao sabe se o braco andou,
-// parou ou travou. Por isso o limite da faixa e marcado por VOCE, com a
-// busca guiada: o braco anda um micropasso por comando e para. Assim
-// nunca se corre a faixa inteira as cegas contra o batente.
-//
-//   ZUMBIDO COM O BRACO PARADO = servo empurrando o batente. Recue um
-//   passo na hora: parado ali ele puxa corrente, esquenta e desgasta a
-//   engrenagem.
+// parou ou travou. Por isso quem marca o limite e voce -- e para isso o
+// avanco e passo a passo, pausavel e reversivel, nunca uma corrida as
+// cegas ate a ponta.
 //
 // LIGACAO
 //   sinal -> pino 9
@@ -27,19 +40,26 @@
 //            passa de 700 mA no arranque e derruba o Arduino)
 //   GND   -> GND da fonte E GND do Arduino, no mesmo ponto
 //
+// ---------------------------------------------------------------------
 // ROTEIRO
-//   1. Abra o Monitor Serial em 9600, com "Nova linha" ao final.
-//   2. C         centraliza em 1500 us (posicao segura)
-//   3. - - -     desce de micropasso em micropasso ate o braco parar de
-//                avancar; ZUMBIU, volte um passo com +
-//      [         marca ali o limite INFERIOR
-//   4. + + +     sobe ate o braco parar de avancar
-//      ]         marca o limite SUPERIOR
-//   5. M <graus> em algumas posicoes dentro da faixa, meca o angulo com
-//                transferidor ou video e registre o par (pulso, angulo)
-//   6. A         ajusta a reta graus->us com os pares registrados
-//   7. G <graus> daqui em diante o braco vai ao angulo de verdade
-//   8. V         varredura completa, so para registrar a curva em video
+//   1. Monitor Serial em 9600, com "Nova linha" ao final.
+//   2. A         o braco comeca a andar, um micropasso por vez, a
+//                partir do meio, descendo. Cada passo sai na serial.
+//   3. P         pausa assim que ele parar de avancar (ou zumbir).
+//      -  +      ajuste fino: recue ou avance de um passo para achar o
+//                ULTIMO pulso em que ele ainda se mexeu.
+//      A         se quiser continuar descendo, retoma de onde parou.
+//   4. F         fecha este lado: grava o limite, inverte o sentido e
+//                volta ao meio. Mande A de novo para procurar o outro.
+//   5. F         no segundo lado, encerra a busca e mostra a faixa.
+//   6. M <graus> dentro da faixa, posicione (U <us>), meca o angulo com
+//                transferidor ou video e registre o par.
+//   7. R         ajusta a reta graus->us com os pares registrados.
+//   8. G <graus> daqui em diante o braco vai ao angulo de verdade.
+//      E         grava a calibracao na EEPROM.
+//   9. V         varredura completa, para registrar a curva em video.
+//
+// Se voce ja conhece a faixa, pule 2 a 5 com  J <min> <max>.
 //
 // NO TINKERCAD
 // O servo simulado e ideal: aceita 544..2400 us, nao tem zona morta,
@@ -56,21 +76,31 @@
 
 const uint8_t PINO_SERVO = 9;
 const uint8_t PINO_LED = LED_BUILTIN;
-const int LIMITE_ABSOLUTO_MIN = 400;   // nenhum comando passa daqui
+
+// Nenhum comando passa daqui, em nenhuma circunstancia. E a trava que
+// impede uma busca distraida de levar o servo muito alem do batente.
+const int LIMITE_ABSOLUTO_MIN = 400;
 const int LIMITE_ABSOLUTO_MAX = 2600;
+const int PULSO_SEGURO = 1500;         // meio do curso
 const uint8_t MAX_PARES = 12;          // pontos de calibracao guardados
 
 int larguraMin = 1000;     // faixa de trabalho, estreita ate ser medida
 int larguraMax = 2000;
-int micropasso = 5;        // us por toque em + ou -
-int esperaMs = 400;        // parada em cada largura durante a varredura
-int larguraAtual = 1500;
+int micropasso = 5;        // us por passo da busca
+int intervaloMs = 1200;    // tempo parado em cada passo da busca
+int esperaMs = 400;        // tempo parado em cada largura da varredura
+int larguraAtual = PULSO_SEGURO;
 
-// Caminhada automatica: 0 parada, +1 subindo, -1 descendo.
-int andando = 0;
+// Busca do limite --------------------------------------------------
+// sentido: -1 procura o limite de baixo, +1 o de cima.
+// andando: true enquanto o braco avanca sozinho.
+// Os dois lados ja fechados sao marcados para o F saber se ainda falta
+// um lado ou se e hora de encerrar.
+int sentido = -1;
+bool andando = false;
+bool fechadoBaixo = false;
+bool fechadoCima = false;
 unsigned long proximoPasso = 0;
-int esperaCaminhada = 1200;   // ms entre micropassos, tempo de olhar
-int ultimoSentido = +1;       // em que sentido foi o ultimo passo
 
 // Calibracao. Comeca com o padrao da biblioteca, que e justamente o que
 // se quer substituir por medicao.
@@ -95,53 +125,121 @@ void aplicar(int largura) {
   larguraAtual = largura;
 }
 
-void passo(int sentido) {
-  int alvo = larguraAtual + sentido * micropasso;
-  if (alvo < LIMITE_ABSOLUTO_MIN || alvo > LIMITE_ABSOLUTO_MAX) {
-    Serial.println(F("! limite absoluto do sketch; nao vou alem"));
-    return;
-  }
-  aplicar(alvo);
-  ultimoSentido = sentido;
-  Serial.print(F("pulso = "));
+void mostrarPulso(const char* prefixo) {
+  Serial.print(prefixo);
   Serial.print(larguraAtual);
-  Serial.print(F(" us   (grau estimado "));
+  Serial.print(F(" us  (grau estimado "));
   Serial.print((larguraAtual - usEmZeroGrau) / usPorGrau, 1);
   Serial.println(F(")"));
-  Serial.println(F("  avancou? deixe seguir. parou ou zumbiu? mande K"));
 }
 
-void pararCaminhada(const char* motivo) {
-  if (andando == 0) return;
-  andando = 0;
-  Serial.print(F("caminhada parada ("));
-  Serial.print(motivo);
-  Serial.print(F(") em "));
-  Serial.print(larguraAtual);
-  Serial.println(F(" us"));
-}
-
-void marcarLimite() {
-  // Marca no sentido do ultimo passo, recuando a margem de seguranca:
-  // quando o braco para de avancar ele JA esta no batente, e deixar o
-  // limite ali significa trabalhar empurrando a trava.
-  pararCaminhada("K");
-  int margem = 2 * micropasso;
-  if (ultimoSentido > 0) {
-    larguraMax = larguraAtual - margem;
-    Serial.print(F("limite SUPERIOR = "));
-    Serial.print(larguraMax);
-  } else {
-    larguraMin = larguraAtual + margem;
-    Serial.print(F("limite INFERIOR = "));
-    Serial.print(larguraMin);
+bool darPasso(int direcao) {
+  int alvo = larguraAtual + direcao * micropasso;
+  if (alvo < LIMITE_ABSOLUTO_MIN || alvo > LIMITE_ABSOLUTO_MAX) {
+    Serial.println(F("! trava do sketch; nao vou alem"));
+    return false;
   }
-  Serial.print(F(" us  (o braco parou em "));
+  aplicar(alvo);
+  mostrarPulso("  ");
+  return true;
+}
+
+// ---------------------------------------------------------------------
+// BUSCA DO LIMITE: A avanca, P pausa, F fecha o lado
+// ---------------------------------------------------------------------
+void avancar() {
+  if (fechadoBaixo && fechadoCima) {
+    Serial.println(F("A busca ja terminou. J <min> <max> refaz a faixa "
+                     "na mao."));
+    return;
+  }
+  andando = true;
+  proximoPasso = millis();
+  Serial.print(F("[A] andando "));
+  Serial.print(sentido < 0 ? F("para BAIXO") : F("para CIMA"));
+  Serial.print(F(", "));
+  Serial.print(micropasso);
+  Serial.print(F(" us a cada "));
+  Serial.print(intervaloMs);
+  Serial.println(F(" ms."));
+  Serial.println(F("    P pausa  |  - e + ajustam de um passo  |  "
+                   "F fecha este lado"));
+}
+
+void pausar(bool avisar) {
+  if (!andando) {
+    if (avisar) mostrarPulso("[P] parado em ");
+    return;
+  }
+  andando = false;
+  if (avisar) {
+    mostrarPulso("[P] pausado em ");
+    Serial.println(F("    ainda avancava? A retoma. Parou de vez? "
+                     "ajuste com - / + e feche com F"));
+  }
+}
+
+void finalizar() {
+  pausar(false);
+
+  // Com os dois lados ja fechados, um F extra -- tecla repetida, linha
+  // reenviada -- sobrescreveria a faixa com a posicao atual, que pode
+  // estar em qualquer lugar. Aqui ele so repete o resumo.
+  if (fechadoBaixo && fechadoCima) {
+    Serial.print(F("[F] a busca ja terminou: faixa "));
+    Serial.print(larguraMin);
+    Serial.print(F(" a "));
+    Serial.print(larguraMax);
+    Serial.println(F(" us. Para refazer, use J <min> <max>."));
+    return;
+  }
+
+  // O limite guardado recua uma margem: quando o braco para de avancar
+  // ele JA esta encostado no batente, e deixar o limite exatamente ali
+  // significa trabalhar empurrando a trava.
+  int margem = 2 * micropasso;
+  if (sentido < 0) {
+    larguraMin = larguraAtual + margem;
+    fechadoBaixo = true;
+    Serial.print(F("[F] limite INFERIOR = "));
+    Serial.print(larguraMin);
+  } else {
+    larguraMax = larguraAtual - margem;
+    fechadoCima = true;
+    Serial.print(F("[F] limite SUPERIOR = "));
+    Serial.print(larguraMax);
+  }
+  Serial.print(F(" us   (parou em "));
   Serial.print(larguraAtual);
-  Serial.print(F("; recuei "));
+  Serial.print(F(", recuei "));
   Serial.print(margem);
   Serial.println(F(" us de margem)"));
-  aplicar(ultimoSentido > 0 ? larguraMax : larguraMin);
+
+  if (fechadoBaixo && fechadoCima) {
+    if (larguraMax <= larguraMin) {
+      Serial.println(F("! os dois limites se cruzaram; refaca com J "
+                       "<min> <max>"));
+      return;
+    }
+    aplicar((larguraMin + larguraMax) / 2);
+    Serial.println(F("--- busca concluida ---"));
+    Serial.print(F("  faixa util: "));
+    Serial.print(larguraMin);
+    Serial.print(F(" a "));
+    Serial.print(larguraMax);
+    Serial.print(F(" us  ("));
+    Serial.print(larguraMax - larguraMin);
+    Serial.println(F(" us de curso)"));
+    Serial.println(F("  Agora a calibracao: U <us> posiciona, meca o "
+                     "angulo e registre com M <graus>."));
+    Serial.println(F("  Com 2 ou mais pontos, R ajusta a reta."));
+  } else {
+    sentido = -sentido;
+    aplicar(PULSO_SEGURO);
+    Serial.print(F("    volto ao meio; agora o outro lado ("));
+    Serial.print(sentido < 0 ? F("para BAIXO") : F("para CIMA"));
+    Serial.println(F("). Mande A."));
+  }
 }
 
 // ---------------------------------------------------------------------
@@ -149,7 +247,7 @@ void marcarLimite() {
 // ---------------------------------------------------------------------
 void registrarPar(float graus) {
   if (nPares >= MAX_PARES) {
-    Serial.println(F("! cheio; use A para ajustar ou Z para zerar"));
+    Serial.println(F("! cheio; use R para ajustar ou Z para zerar"));
     return;
   }
   paresUs[nPares] = larguraAtual;
@@ -163,9 +261,9 @@ void registrarPar(float graus) {
 
 void ajustarReta() {
   // Minimos quadrados de us = a*graus + b. Com dois pontos vira a reta
-  // que passa por eles; com mais, a media ponderada que melhor os
-  // representa -- e e por isso que vale medir em varias posicoes, e nao
-  // so nas duas pontas, onde a folga e maior.
+  // que passa por eles; com mais, a que melhor representa o conjunto --
+  // e por isso vale medir em varias posicoes, e nao so nas duas pontas,
+  // onde a folga e maior.
   if (nPares < 2) {
     Serial.println(F("! preciso de pelo menos 2 pontos (comando M)"));
     return;
@@ -253,10 +351,10 @@ void piscarSincronismo() {
   }
 }
 
-void registrar(const char* sentido) {
+void registrar(const char* direcao) {
   Serial.print(millis());       Serial.print(';');
   Serial.print(larguraAtual);   Serial.print(';');
-  Serial.print(sentido);        Serial.print(';');
+  Serial.print(direcao);        Serial.print(';');
   Serial.println((larguraAtual - usEmZeroGrau) / usPorGrau, 2);
 }
 
@@ -284,14 +382,18 @@ void varrer() {
 // ---------------------------------------------------------------------
 void mostrarEstado() {
   Serial.println(F("--- estado ---"));
-  Serial.print(F("  faixa marcada: ")); Serial.print(larguraMin);
-  Serial.print(F(" a "));               Serial.print(larguraMax);
-  Serial.print(F(" us   |   pulso atual: ")); Serial.print(larguraAtual);
-  Serial.println(F(" us"));
-  Serial.print(F("  micropasso: "));    Serial.print(micropasso);
-  Serial.print(F(" us   |   espera: ")); Serial.print(esperaMs);
-  Serial.print(F(" ms   |   pontos de calibracao: "));
-  Serial.println(nPares);
+  Serial.print(F("  pulso atual: "));  Serial.print(larguraAtual);
+  Serial.print(F(" us   |   "));
+  Serial.println(andando ? F("ANDANDO") : F("parado"));
+  Serial.print(F("  faixa: "));        Serial.print(larguraMin);
+  Serial.print(F(" a "));              Serial.print(larguraMax);
+  Serial.print(F(" us   |   lado de baixo "));
+  Serial.print(fechadoBaixo ? F("fechado") : F("em aberto"));
+  Serial.print(F(", de cima "));
+  Serial.println(fechadoCima ? F("fechado") : F("em aberto"));
+  Serial.print(F("  micropasso: "));   Serial.print(micropasso);
+  Serial.print(F(" us   |   intervalo: ")); Serial.print(intervaloMs);
+  Serial.print(F(" ms   |   pontos: ")); Serial.println(nPares);
   Serial.print(F("  us = "));  Serial.print(usEmZeroGrau, 1);
   Serial.print(F(" + "));      Serial.print(usPorGrau, 4);
   Serial.println(F(" * graus"));
@@ -299,28 +401,34 @@ void mostrarEstado() {
 
 void mostrarAjuda() {
   Serial.println(F("=== comandos ==="));
-  Serial.println(F("  C          centraliza em 1500 us"));
-  Serial.println(F("  +  /  -    anda UM micropasso para cima / para baixo"));
-  Serial.println(F("  W+ / W-    anda sozinho, passo a passo, ate voce mandar K"));
-  Serial.println(F("  K          PARA e marca o limite no sentido em que ia"));
-  Serial.println(F("  [  /  ]    marca o pulso atual como limite inf / sup"));
-  Serial.println(F("  P <us>     vai para uma largura de pulso"));
-  Serial.println(F("  M <graus>  registra: pulso atual = este angulo medido"));
-  Serial.println(F("  A          ajusta a reta graus->us com os pontos"));
+  Serial.println(F("  A          avanca passo a passo (retoma depois do P)"));
+  Serial.println(F("  P          pausa onde esta"));
+  Serial.println(F("  F          fecha o lado: grava o limite e inverte"));
+  Serial.println(F("  -  /  +    recua / avanca UM micropasso"));
+  Serial.println(F("  U <us>     vai direto para uma largura de pulso"));
+  Serial.println(F("  J <a> <b>  define a faixa na mao, sem busca"));
+  Serial.println(F("  C          volta ao meio (1500 us)"));
+  Serial.println(F("  M <graus>  registra: pulso atual = angulo medido"));
+  Serial.println(F("  R          ajusta a reta graus->us"));
   Serial.println(F("  Z          apaga os pontos de calibracao"));
   Serial.println(F("  G <graus>  vai ao angulo usando a calibracao"));
   Serial.println(F("  V          varredura completa (sobe e desce)"));
-  Serial.println(F("  D <us>     micropasso   T <ms> espera da varredura"));
-  Serial.println(F("  I <ms>     intervalo entre passos da caminhada"));
+  Serial.println(F("  D <us>     micropasso   I <ms> intervalo da busca"));
+  Serial.println(F("  T <ms>     espera da varredura"));
 #if USAR_EEPROM
-  Serial.println(F("  E / R      grava / recarrega da EEPROM"));
+  Serial.println(F("  E / B      grava / busca na EEPROM"));
 #endif
   Serial.println(F("  L          solta o servo     ?  estado"));
 }
 
-long lerInteiro(const char* texto) {
+long lerInteiro(const char* texto, const char** fim) {
   while (*texto == ' ') texto++;
-  return atol(texto);
+  long valor = atol(texto);
+  if (fim) {
+    while (*texto && *texto != ' ') texto++;
+    *fim = texto;
+  }
+  return valor;
 }
 
 float lerDecimal(const char* texto) {
@@ -333,96 +441,113 @@ void executar(char* linha) {
   char* argumento = linha + 1;
 
   switch (comando) {
-    case 'C': aplicar(1500); Serial.println(F("centralizado em 1500 us")); break;
-    case '+': pararCaminhada("comando"); passo(+1); break;
-    case '-': pararCaminhada("comando"); passo(-1); break;
+    // --- busca do limite ---
+    case 'A': avancar(); break;
+    case 'P': pausar(true); break;
+    case 'F': finalizar(); break;
 
-    case 'W': {
-      // Caminhada automatica: um micropasso a cada esperaCaminhada ms,
-      // ate voce mandar K. Entre um passo e outro o loop continua
-      // livre, entao o comando de parada e atendido na hora -- com
-      // delay() dentro de um laco ele so seria lido no fim.
-      char sentido = argumento[0];
-      while (*argumento == ' ') { argumento++; sentido = argumento[0]; }
-      andando = (sentido == '-') ? -1 : +1;
-      proximoPasso = millis();
-      Serial.print(F("andando "));
-      Serial.print(andando > 0 ? F("para cima") : F("para baixo"));
-      Serial.print(F(", um passo de "));
-      Serial.print(micropasso);
-      Serial.print(F(" us a cada "));
-      Serial.print(esperaCaminhada);
-      Serial.println(F(" ms. Mande K quando parar de avancar ou zumbir."));
-      break;
-    }
-    case 'K': marcarLimite(); break;
+    case '-': pausar(false); darPasso(-1); break;
+    case '+': pausar(false); darPasso(+1); break;
 
-    case '[':
-      larguraMin = larguraAtual;
-      Serial.print(F("limite inferior = ")); Serial.print(larguraMin);
-      Serial.println(F(" us"));
-      break;
-    case ']':
-      larguraMax = larguraAtual;
-      Serial.print(F("limite superior = ")); Serial.print(larguraMax);
-      Serial.println(F(" us"));
-      break;
-
-    case 'P': {
-      int us = lerInteiro(argumento);
-      if (us > 0) { aplicar(us);
-        Serial.print(F("pulso = ")); Serial.print(larguraAtual);
-        Serial.println(F(" us"));
+    case 'U': {
+      pausar(false);
+      int us = (int)lerInteiro(argumento, NULL);
+      if (us > 0) {
+        // Fora da faixa ja medida o braco pode estar contra o batente.
+        // O comando continua valendo -- a trava absoluta e que protege
+        // o servo -- mas sai avisado, para nao passar despercebido.
+        if (fechadoBaixo && fechadoCima
+            && (us < larguraMin || us > larguraMax)) {
+          Serial.print(F("! "));
+          Serial.print(us);
+          Serial.print(F(" us esta fora da faixa medida ("));
+          Serial.print(larguraMin);
+          Serial.print(F(" a "));
+          Serial.print(larguraMax);
+          Serial.println(F(" us); confira se o braco nao travou"));
+        }
+        aplicar(us);
+        mostrarPulso("pulso = ");
       }
       break;
     }
-    case 'M': registrarPar(lerDecimal(argumento)); break;
-    case 'A': ajustarReta(); break;
-    case 'Z': nPares = 0; Serial.println(F("pontos apagados")); break;
+    case 'J': {
+      const char* resto;
+      int a = (int)lerInteiro(argumento, &resto);
+      int b = (int)lerInteiro(resto, NULL);
+      if (a > 0 && b > a) {
+        larguraMin = constrain(a, LIMITE_ABSOLUTO_MIN, LIMITE_ABSOLUTO_MAX);
+        larguraMax = constrain(b, LIMITE_ABSOLUTO_MIN, LIMITE_ABSOLUTO_MAX);
+        fechadoBaixo = fechadoCima = true;
+        pausar(false);
+        aplicar((larguraMin + larguraMax) / 2);
+        Serial.println(F("faixa definida na mao"));
+      } else {
+        Serial.println(F("! uso: J <min> <max>, com max > min"));
+      }
+      mostrarEstado();
+      break;
+    }
+    case 'C':
+      pausar(false);
+      aplicar(PULSO_SEGURO);
+      mostrarPulso("meio do curso: ");
+      break;
 
+    // --- calibracao ---
+    case 'M': registrarPar(lerDecimal(argumento)); break;
+    case 'R': ajustarReta(); break;
+    case 'Z': nPares = 0; Serial.println(F("pontos apagados")); break;
     case 'G': {
       float graus = lerDecimal(argumento);
       int alvo = (int)round(usEmZeroGrau + usPorGrau * graus);
       if (alvo < larguraMin || alvo > larguraMax) {
-        Serial.print(F("! "));      Serial.print(graus, 1);
+        Serial.print(F("! "));            Serial.print(graus, 1);
         Serial.print(F(" graus daria ")); Serial.print(alvo);
-        Serial.println(F(" us, fora da faixa marcada"));
+        Serial.println(F(" us, fora da faixa"));
         break;
       }
+      pausar(false);
       aplicar(alvo);
       Serial.print(graus, 1);     Serial.print(F(" graus -> "));
       Serial.print(larguraAtual); Serial.println(F(" us"));
       break;
     }
 
-    case 'V': varrer(); break;
-    case 'I': {
-      int valor = lerInteiro(argumento);
-      if (valor > 0) esperaCaminhada = valor;
-      mostrarEstado();
-      break;
-    }
+    // --- varredura e parametros ---
+    case 'V': pausar(false); varrer(); break;
     case 'D': {
-      int valor = lerInteiro(argumento);
+      int valor = (int)lerInteiro(argumento, NULL);
       if (valor > 0) micropasso = valor;
       mostrarEstado();
       break;
     }
+    case 'I': {
+      int valor = (int)lerInteiro(argumento, NULL);
+      if (valor > 0) intervaloMs = valor;
+      mostrarEstado();
+      break;
+    }
     case 'T': {
-      int valor = lerInteiro(argumento);
+      int valor = (int)lerInteiro(argumento, NULL);
       if (valor > 0) esperaMs = valor;
       mostrarEstado();
       break;
     }
 #if USAR_EEPROM
     case 'E': gravarEeprom(); break;
-    case 'R':
-      if (lerEeprom()) { Serial.println(F("recarregado da EEPROM"));
-                         mostrarEstado(); }
-      else Serial.println(F("! nao ha calibracao gravada"));
+    case 'B':
+      if (lerEeprom()) {
+        fechadoBaixo = fechadoCima = true;
+        Serial.println(F("calibracao e faixa recuperadas da EEPROM"));
+        mostrarEstado();
+      } else {
+        Serial.println(F("! nao ha calibracao gravada"));
+      }
       break;
 #endif
-    case 'L': servo.detach(); Serial.println(F("servo solto")); break;
+    case 'L': pausar(false); servo.detach();
+              Serial.println(F("servo solto")); break;
     case '?': mostrarEstado(); break;
     default:  mostrarAjuda(); break;
   }
@@ -431,15 +556,20 @@ void executar(char* linha) {
 void setup() {
   Serial.begin(9600);
   pinMode(PINO_LED, OUTPUT);
-  aplicar(1500);
+  // Primeiro pulso no MEIO do curso: qualquer outro valor faria o braco
+  // atravessar o curso de uma vez, sem aviso, ao ligar.
+  aplicar(PULSO_SEGURO);
   Serial.println(F("=== SG90: faixa util e calibracao ==="));
 #if USAR_EEPROM
-  if (lerEeprom()) Serial.println(F("calibracao recuperada da EEPROM"));
+  if (lerEeprom()) {
+    fechadoBaixo = fechadoCima = true;
+    Serial.println(F("calibracao recuperada da EEPROM"));
+  }
 #endif
   mostrarAjuda();
   mostrarEstado();
-  Serial.println(F("Comece em C, depois - e + para achar os limites. "
-                   "Zumbiu? volte um passo."));
+  Serial.println(F("Braco no meio do curso. Mande A para comecar a "
+                   "procurar o limite de baixo."));
 }
 
 void loop() {
@@ -457,15 +587,16 @@ void loop() {
     }
   }
 
-  // A caminhada vive aqui, e nao dentro de um laco com delay(): assim
-  // o K e lido entre um passo e outro, e nao so no fim.
-  if (andando != 0 && (long)(millis() - proximoPasso) >= 0) {
-    int alvo = larguraAtual + andando * micropasso;
-    if (alvo < LIMITE_ABSOLUTO_MIN || alvo > LIMITE_ABSOLUTO_MAX) {
-      pararCaminhada("limite absoluto do sketch");
+  // O avanco vive aqui, e nao num laco com delay(): assim o P e lido
+  // ENTRE um passo e outro. Dentro de um laco, o comando de parada so
+  // seria atendido quando o laco terminasse -- ou seja, depois de ja
+  // ter passado do batente.
+  if (andando && (long)(millis() - proximoPasso) >= 0) {
+    if (!darPasso(sentido)) {
+      andando = false;
+      Serial.println(F("    avanco interrompido pela trava do sketch"));
       return;
     }
-    passo(andando);
-    proximoPasso = millis() + esperaCaminhada;
+    proximoPasso = millis() + intervaloMs;
   }
 }
