@@ -7,9 +7,12 @@
 #include <cstdio>
 #include <string>
 #include <deque>
-#define F(x) (x)
+typedef char __FlashStringHelper;
+#define F(x) ((const __FlashStringHelper*)(x))
 #define LED_BUILTIN 13
 #define OUTPUT 1
+#define INPUT_PULLUP 2
+inline int digitalRead(int){return 1;}
 #define HIGH 1
 #define LOW 0
 typedef uint8_t byte;
@@ -21,6 +24,7 @@ template<class T> T constrain(T v,T a,T b){return v<a?a:(v>b?b:v);}
 struct SerialClass{
   std::deque<char> entrada;
   void begin(long){}
+  void mandaCru(const std::string& s){ for(char c: s) entrada.push_back(c); }
   void manda(const std::string& s){ for(char c: s) entrada.push_back(c); entrada.push_back('\n'); }
   int available(){ return (int)entrada.size(); }
   int read(){ if(entrada.empty()) return -1; char c=entrada.front(); entrada.pop_front(); return c; }
