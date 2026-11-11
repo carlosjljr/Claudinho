@@ -109,6 +109,13 @@ int intervaloMs = 1200;    // tempo parado em cada passo da busca
 int esperaMs = 400;        // tempo parado em cada largura da varredura
 int larguraAtual = PULSO_SEGURO;
 
+// Modo enxuto: durante a busca, o avanco nao imprime nada. Sao dezenas
+// de linhas "540 us (grau estimado -0,4)" que ninguem le e que so
+// atrapalham na hora de copiar o monitor -- o que interessa da busca
+// sao os dois limites, impressos no fim. Com os botoes ligados, da
+// para conduzir a busca inteira sem uma linha sequer.
+bool enxuto = false;
+
 // Busca do limite --------------------------------------------------
 // sentido: -1 procura o limite de baixo, +1 o de cima.
 // andando: true enquanto o braco avanca sozinho.
@@ -130,6 +137,11 @@ float paresGrau[MAX_PARES];
 uint8_t nPares = 0;
 
 Servo servo;
+
+// A IDE do Arduino cria os prototipos sozinha, mas declarar a mao deixa
+// o arquivo valido como C++ comum -- e assim ele tambem compila fora da
+// IDE, que e como a sessao de teste roda.
+void resumoParaCopiar();
 
 // ---------------------------------------------------------------------
 // MOVIMENTO
@@ -158,7 +170,7 @@ bool darPasso(int direcao) {
     return false;
   }
   aplicar(alvo);
-  mostrarPulso("  ");
+  if (!enxuto) mostrarPulso("  ");
   return true;
 }
 
@@ -251,6 +263,7 @@ void finalizar() {
     Serial.println(F("  Agora a calibracao: U <us> posiciona, meca o "
                      "angulo e registre com M <graus>."));
     Serial.println(F("  Com 2 ou mais pontos, R ajusta a reta."));
+    resumoParaCopiar();
   } else {
     sentido = -sentido;
     aplicar(PULSO_SEGURO);
@@ -329,6 +342,7 @@ void ajustarReta() {
   Serial.print(F(" us/grau ("));
   Serial.print(100.0 * (usPorGrau / padrao - 1.0), 1);
   Serial.println(F("% de diferenca)"));
+  resumoParaCopiar();
 }
 
 #if USAR_EEPROM
@@ -417,6 +431,26 @@ void mostrarEstado() {
   Serial.println(F(" * graus"));
 }
 
+void resumoParaCopiar() {
+  // Um bloco unico, em CSV, com tudo que precisa sair daqui. Evita
+  // garimpar o resultado no meio do historico do monitor.
+  Serial.println(F("===== RESUMO (copie deste bloco) ====="));
+  Serial.print(F("faixa_min_us;faixa_max_us;us_por_grau;us_em_zero_grau\n"));
+  Serial.print(larguraMin);     Serial.print(';');
+  Serial.print(larguraMax);     Serial.print(';');
+  Serial.print(usPorGrau, 4);   Serial.print(';');
+  Serial.println(usEmZeroGrau, 1);
+  if (nPares > 0) {
+    Serial.println(F("ponto;largura_us;angulo_graus"));
+    for (uint8_t i = 0; i < nPares; i++) {
+      Serial.print(i + 1);          Serial.print(';');
+      Serial.print(paresUs[i]);     Serial.print(';');
+      Serial.println(paresGrau[i], 2);
+    }
+  }
+  Serial.println(F("====================================="));
+}
+
 void mostrarAjuda() {
   Serial.println(F("=== comandos ==="));
   Serial.println(F("  A          avanca passo a passo (retoma depois do P)"));
@@ -436,6 +470,8 @@ void mostrarAjuda() {
 #if USAR_EEPROM
   Serial.println(F("  E / B      grava / busca na EEPROM"));
 #endif
+  Serial.println(F("  Q          liga/desliga o modo enxuto (avanco calado)"));
+  Serial.println(F("  H          resumo em bloco unico, pronto para copiar"));
   Serial.println(F("  L          solta o servo     ?  estado"));
 }
 
@@ -566,6 +602,13 @@ void executar(char* linha) {
 #endif
     case 'L': pausar(false); servo.detach();
               Serial.println(F("servo solto")); break;
+    case 'Q':
+      enxuto = !enxuto;
+      Serial.print(F("modo enxuto "));
+      Serial.println(enxuto ? F("LIGADO: o avanco nao imprime mais")
+                            : F("desligado"));
+      break;
+    case 'H': resumoParaCopiar(); break;
     case '?': mostrarEstado(); break;
     default:  mostrarAjuda(); break;
   }
