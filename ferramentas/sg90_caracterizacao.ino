@@ -96,8 +96,15 @@ const unsigned long ANTIRRUIDO_MS = 40;
 
 // Nenhum comando passa daqui, em nenhuma circunstancia. E a trava que
 // impede uma busca distraida de levar o servo muito alem do batente.
-const int LIMITE_ABSOLUTO_MIN = 400;
-const int LIMITE_ABSOLUTO_MAX = 2600;
+// Comecam estreitos de proposito. Se o braco ainda estiver andando
+// quando a trava barrar, o comando X estica este lado em PASSO_TRAVA,
+// ate o teto fisico abaixo -- que e onde o circuito do servo satura e
+// nenhum servo hobby tem mais curso.
+int LIMITE_ABSOLUTO_MIN = 400;
+int LIMITE_ABSOLUTO_MAX = 2600;
+const int TRAVA_MINIMA = 300;
+const int TRAVA_MAXIMA = 2700;
+const int PASSO_TRAVA = 200;
 const int PULSO_SEGURO = 1500;         // meio do curso
 const unsigned long PAUSA_COMANDO_MS = 80;  // silencio que fecha a linha
 const uint8_t MAX_PARES = 12;          // pontos de calibracao guardados
@@ -127,6 +134,12 @@ bool fechadoBaixo = false;
 bool fechadoCima = false;
 unsigned long proximoPasso = 0;
 
+// Direcao do ultimo passo TENTADO, inclusive o que a trava barrou e os
+// dados a mao com + e -. O X estica a trava deste lado. Usar o
+// `sentido` da busca daria o lado errado sempre que o ultimo movimento
+// tivesse vindo de um + ou - em sentido contrario.
+int ultimaDirecao = -1;
+
 // Calibracao. Comeca com o padrao da biblioteca, que e justamente o que
 // se quer substituir por medicao.
 float usPorGrau = (2400.0 - 544.0) / 180.0;
@@ -142,6 +155,7 @@ Servo servo;
 // o arquivo valido como C++ comum -- e assim ele tambem compila fora da
 // IDE, que e como a sessao de teste roda.
 void resumoParaCopiar();
+void esticarTrava();
 
 // ---------------------------------------------------------------------
 // MOVIMENTO
@@ -164,9 +178,16 @@ void mostrarPulso(const char* prefixo) {
 }
 
 bool darPasso(int direcao) {
+  ultimaDirecao = direcao;
   int alvo = larguraAtual + direcao * micropasso;
   if (alvo < LIMITE_ABSOLUTO_MIN || alvo > LIMITE_ABSOLUTO_MAX) {
-    Serial.println(F("! trava do sketch; nao vou alem"));
+    Serial.print(F("! trava do sketch em "));
+    Serial.print(alvo < LIMITE_ABSOLUTO_MIN ? LIMITE_ABSOLUTO_MIN
+                                            : LIMITE_ABSOLUTO_MAX);
+    Serial.println(F(" us; nao vou alem"));
+    Serial.println(F("  Se o braco AINDA estava andando, mande X para "
+                     "esticar a trava deste lado."));
+    Serial.println(F("  Se ja tinha parado, o limite e aqui: mande F."));
     return false;
   }
   aplicar(alvo);
@@ -431,6 +452,42 @@ void mostrarEstado() {
   Serial.println(F(" * graus"));
 }
 
+void esticarTrava() {
+  // Estica so o lado em que a busca esta indo, e so um passo por vez:
+  // a trava existe para impedir que uma distracao leve o servo muito
+  // alem do batente, e esticar os dois lados de uma vez a anularia.
+  if (ultimaDirecao < 0) {
+    if (LIMITE_ABSOLUTO_MIN <= TRAVA_MINIMA) {
+      Serial.print(F("! ja estou em "));
+      Serial.print(TRAVA_MINIMA);
+      Serial.println(F(" us, o minimo fisico. Abaixo disso o circuito "
+                       "do servo satura e nao ha mais curso."));
+      return;
+    }
+    LIMITE_ABSOLUTO_MIN -= PASSO_TRAVA;
+    if (LIMITE_ABSOLUTO_MIN < TRAVA_MINIMA) LIMITE_ABSOLUTO_MIN = TRAVA_MINIMA;
+    Serial.print(F("trava inferior esticada para "));
+    Serial.print(LIMITE_ABSOLUTO_MIN);
+  } else {
+    if (LIMITE_ABSOLUTO_MAX >= TRAVA_MAXIMA) {
+      Serial.print(F("! ja estou em "));
+      Serial.print(TRAVA_MAXIMA);
+      Serial.println(F(" us, o maximo fisico."));
+      return;
+    }
+    LIMITE_ABSOLUTO_MAX += PASSO_TRAVA;
+    if (LIMITE_ABSOLUTO_MAX > TRAVA_MAXIMA) LIMITE_ABSOLUTO_MAX = TRAVA_MAXIMA;
+    Serial.print(F("trava superior esticada para "));
+    Serial.print(LIMITE_ABSOLUTO_MAX);
+  }
+  Serial.println(F(" us. Mande A para continuar."));
+  // O attach guarda a faixa aceita, entao precisa ser refeito -- sem
+  // isto o writeMicroseconds continuaria cortado no valor antigo, em
+  // silencio.
+  servo.detach();
+  aplicar(larguraAtual);
+}
+
 void resumoParaCopiar() {
   // Um bloco unico, em CSV, com tudo que precisa sair daqui. Evita
   // garimpar o resultado no meio do historico do monitor.
@@ -470,6 +527,7 @@ void mostrarAjuda() {
 #if USAR_EEPROM
   Serial.println(F("  E / B      grava / busca na EEPROM"));
 #endif
+  Serial.println(F("  X          estica a trava deste lado em 200 us"));
   Serial.println(F("  Q          liga/desliga o modo enxuto (avanco calado)"));
   Serial.println(F("  H          resumo em bloco unico, pronto para copiar"));
   Serial.println(F("  L          solta o servo     ?  estado"));
@@ -608,6 +666,7 @@ void executar(char* linha) {
       Serial.println(enxuto ? F("LIGADO: o avanco nao imprime mais")
                             : F("desligado"));
       break;
+    case 'X': esticarTrava(); break;
     case 'H': resumoParaCopiar(); break;
     case '?': mostrarEstado(); break;
     default:  mostrarAjuda(); break;
