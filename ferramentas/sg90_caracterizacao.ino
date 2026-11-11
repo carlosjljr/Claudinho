@@ -156,6 +156,7 @@ Servo servo;
 // IDE, que e como a sessao de teste roda.
 void resumoParaCopiar();
 void esticarTrava();
+void avancar(int partida);
 
 // ---------------------------------------------------------------------
 // MOVIMENTO
@@ -167,6 +168,19 @@ void aplicar(int largura) {
   }
   servo.writeMicroseconds(largura);
   larguraAtual = largura;
+}
+
+void irSuave(int destino) {
+  // Pulo direto para um pulso distante faz o braco atravessar o curso
+  // na velocidade maxima e bater na chegada. Aqui ele vai em degraus de
+  // 20 us, que o servo acompanha sem solavanco.
+  destino = constrain(destino, LIMITE_ABSOLUTO_MIN, LIMITE_ABSOLUTO_MAX);
+  const int degrau = 20;
+  while (abs(destino - larguraAtual) > degrau) {
+    aplicar(larguraAtual + (destino > larguraAtual ? degrau : -degrau));
+    delay(20);
+  }
+  aplicar(destino);
 }
 
 void mostrarPulso(const char* prefixo) {
@@ -198,11 +212,17 @@ bool darPasso(int direcao) {
 // ---------------------------------------------------------------------
 // BUSCA DO LIMITE: A avanca, P pausa, F fecha o lado
 // ---------------------------------------------------------------------
-void avancar() {
+void avancar(int partida) {
   if (fechadoBaixo && fechadoCima) {
     Serial.println(F("A busca ja terminou. J <min> <max> refaz a faixa "
                      "na mao."));
     return;
+  }
+  // Comecar de um pulso escolhido poupa a caminhada pelo trecho que ja
+  // se sabe livre -- o interessante e so a vizinhanca do batente.
+  if (partida > 0) {
+    irSuave(partida);
+    mostrarPulso("[A] partindo de ");
   }
   andando = true;
   proximoPasso = millis();
@@ -272,7 +292,7 @@ void finalizar() {
                        "<min> <max>"));
       return;
     }
-    aplicar((larguraMin + larguraMax) / 2);
+    irSuave((larguraMin + larguraMax) / 2);
     Serial.println(F("--- busca concluida ---"));
     Serial.print(F("  faixa util: "));
     Serial.print(larguraMin);
@@ -287,7 +307,7 @@ void finalizar() {
     resumoParaCopiar();
   } else {
     sentido = -sentido;
-    aplicar(PULSO_SEGURO);
+    irSuave(PULSO_SEGURO);
     Serial.print(F("    volto ao meio; agora o outro lado ("));
     Serial.print(sentido < 0 ? F("para BAIXO") : F("para CIMA"));
     Serial.println(F("). Mande A."));
@@ -510,7 +530,7 @@ void resumoParaCopiar() {
 
 void mostrarAjuda() {
   Serial.println(F("=== comandos ==="));
-  Serial.println(F("  A          avanca passo a passo (retoma depois do P)"));
+  Serial.println(F("  A [us]     avanca passo a passo; com um valor, parte dali"));
   Serial.println(F("  P          pausa onde esta"));
   Serial.println(F("  F          fecha o lado: grava o limite e inverte"));
   Serial.println(F("  -  /  +    recua / avanca UM micropasso"));
@@ -554,7 +574,7 @@ void executar(char* linha) {
 
   switch (comando) {
     // --- busca do limite ---
-    case 'A': avancar(); break;
+    case 'A': avancar((int)lerInteiro(argumento, NULL)); break;
     case 'P': pausar(true); break;
     case 'F': finalizar(); break;
 
@@ -690,7 +710,7 @@ void lerBotoes() {
         ultimaMudanca[i] = millis();
         anterior[i] = agora;
         if (!agora) {                                 // apertou
-          if (i == 0) avancar();
+          if (i == 0) avancar(0);
           else if (i == 1) pausar(true);
           else finalizar();
         }
