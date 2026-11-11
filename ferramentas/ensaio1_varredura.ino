@@ -47,17 +47,19 @@ const uint8_t N_REPETICOES = 3;
 // ---- Calibracao medida (saida do sg90_caracterizacao.ino) -----------
 // Enquanto estiver com os valores da biblioteca, o ensaio reproduz o
 // comportamento antigo -- inclusive o erro de ganho.
-const float US_POR_GRAU_1 = (2400.0 - 544.0) / 180.0;
-const float US_ZERO_1 = 544.0;
-const float US_POR_GRAU_2 = (2400.0 - 544.0) / 180.0;
-const float US_ZERO_2 = 544.0;
+// SG90 n.6, ensaio 3: 0/90/180 graus visuais em 3 passadas subindo.
+// Residuo RMS 0,56 grau. Troque pelos valores de cada servo medido.
+const float US_POR_GRAU_1 = 11.2130;
+const float US_ZERO_1 = 433.6;
+const float US_POR_GRAU_2 = 11.2130;
+const float US_ZERO_2 = 433.6;
 
 // Faixa aceita pelo attach. ISTO IMPORTA: writeMicroseconds e LIMITADO
 // aos extremos passados no attach, e attach(pino) sozinho usa os 544 e
 // 2400 da biblioteca. Se a calibracao medida pedir 500 ou 2500 us, o
 // comando seria cortado em silencio e o ensaio inteiro sairia com os
 // extremos errados, sem nenhum aviso.
-const int US_MIN_ATTACH = 500;
+const int US_MIN_ATTACH = 400;   // o 0 grau calibrado fica em 434 us
 const int US_MAX_ATTACH = 2500;
 
 Servo servo1, servo2;
