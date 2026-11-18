@@ -25,6 +25,8 @@ void menu() {
   Serial.println(F("|                        (cancela o movimento atual)|"));
   Serial.println(F("| A      avançar                                    |"));
   Serial.println(F("| P      parar                                      |"));
+  Serial.println(F("| -      retornar um passo (5 µs)                   |"));
+  Serial.println(F("| +      avançar um passo (5 µs)                    |"));
   Serial.println(F("| LI     marcar limite inferior                     |"));
   Serial.println(F("| LS     marcar limite superior                     |"));
   Serial.println(F("| V0     marcar pulso atual como 0 grau             |"));
@@ -133,6 +135,12 @@ void executar(char* l) {
   else if (!strcmp(l, "P")) {
     rodando = false;
     Serial.print(F("Parado em ")); mostrar(atual);
+  }
+  else if (!strcmp(l, "-") || !strcmp(l, "+")) {
+    // Ajuste fino: para o movimento automático e anda um passo só.
+    rodando = false;
+    ir(atual + (l[0] == '+' ? PASSO : -PASSO));
+    mostrar(atual);
   }
   else if (!strcmp(l, "LI")) { limInf = atual; Serial.print(F("Limite inferior: ")); mostrar(atual); }
   else if (!strcmp(l, "LS")) { limSup = atual; Serial.print(F("Limite superior: ")); mostrar(atual); }
