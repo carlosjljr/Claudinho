@@ -1,31 +1,40 @@
 // SG90 - caracterização por intervalos de pulso (µs)
-// Comandos (Monitor Serial 9600):
-//   I <início> <fim> [ms]  define o intervalo e, opcional, o tempo por passo
-//                          ex.: I 500 300 1000  (de 500 a 300 µs, 1 s por passo)
-//   A  avançar      P  pausar      F  finalizar o intervalo
-//   L  marcar o pulso atual como limite
-//   V <µs>     vai direto a um pulso
-//   D <µs>     tamanho do passo (padrão 5)
-//   T <ms>     tempo por passo (padrão 1000)
-//   M <graus>  medição: pulso atual = ângulo medido
-//   R          ajusta a reta de calibração
-//   G <graus>  gira até o ângulo calibrado
-//   S          sumário       X  soltar o servo
+// O menu de comandos aparece ao ligar e a cada comando não reconhecido.
 #include <Servo.h>
 
-const int PINO = 9, TRAVA_MIN = 300, TRAVA_MAX = 2700;
+const int PINO = 9, TRAVA_MIN = 300, TRAVA_MAX = 2700, PASSO = 5;
+const byte MAX_PASSADAS = 10;
 
 Servo servo;
-int atual = 1500, inicio = 0, fim = 0, passo = 5, tempoMs = 1000;
-int limMin = 0, limMax = 0;
+int atual = 1500, inicio = 0, fim = 0, tempoMs = 1000;
+int limInf = 0, limSup = 0;
 bool rodando = false;
 unsigned long proximo = 0;
 
-int parUs[12]; float parGrau[12]; byte nPares = 0;
+// marcações de 0, 90 e 180 graus; a k-ésima de cada lista é a passada k
+int marca[3][MAX_PASSADAS]; byte nMarca[3] = {0, 0, 0};
+const int ANG[3] = {0, 90, 180};
 float usPorGrau = 0, usZero = 0;
 
-// Ângulo previsto: pela calibração, se já existe; senão pela tabela da
-// biblioteca Servo (544 a 2400 µs = 0 a 180°), só como referência.
+void menu() {
+  Serial.println(F("+---------------------------------------------------+"));
+  Serial.println(F("|              COMANDOS DE CARACTERIZAÇÃO           |"));
+  Serial.println(F("+---------------------------------------------------+"));
+  Serial.println(F("| I <início> <fim> <ms>  define o intervalo         |"));
+  Serial.println(F("|                        ex.: I 500 300 1000        |"));
+  Serial.println(F("|                        (cancela o movimento atual)|"));
+  Serial.println(F("| A      avançar                                    |"));
+  Serial.println(F("| P      parar                                      |"));
+  Serial.println(F("| LI     marcar limite inferior                     |"));
+  Serial.println(F("| LS     marcar limite superior                     |"));
+  Serial.println(F("| V0     marcar pulso atual como 0 grau             |"));
+  Serial.println(F("| V90    marcar pulso atual como 90 graus           |"));
+  Serial.println(F("| V180   marcar pulso atual como 180 graus          |"));
+  Serial.println(F("+---------------------------------------------------+"));
+}
+
+// Ângulo previsto: pela calibração das marcações, se já existe; senão pela
+// tabela da biblioteca Servo (544 a 2400 µs = 0 a 180°), só como referência.
 float anguloPrevisto(int us) {
   if (usPorGrau) return (us - usZero) / usPorGrau;
   return (us - 544.0) * 180.0 / (2400.0 - 544.0);
@@ -49,102 +58,94 @@ void irSuave(int us) {
   ir(us);
 }
 
-void finalizar(const __FlashStringHelper* motivo) {
-  rodando = false;
-  inicio = fim = 0;
-  Serial.print(motivo); Serial.print(F(" em ")); mostrar(atual);
-  Serial.println(F("Continuar? Envie I <início> <fim> para um novo intervalo, ou L para marcar o limite."));
-}
-
-void marcarLimite() {
-  if (atual < 1500) limMin = atual; else limMax = atual;
-  Serial.print(atual < 1500 ? F("Limite inferior: ") : F("Limite superior: "));
-  mostrar(atual);
-}
-
+// Reta µs = usZero + usPorGrau * graus, por mínimos quadrados sobre todas
+// as marcações feitas. Precisa de pelo menos dois ângulos diferentes.
 void ajustarReta() {
-  if (nPares < 2) { Serial.println(F("! São necessárias ao menos 2 medições (M).")); return; }
-  float sx = 0, sy = 0, sxy = 0, sxx = 0, n = nPares;
-  for (byte i = 0; i < nPares; i++) {
-    sx += parGrau[i]; sy += parUs[i];
-    sxy += parGrau[i] * parUs[i]; sxx += parGrau[i] * parGrau[i];
-  }
+  float sx = 0, sy = 0, sxy = 0, sxx = 0, n = 0;
+  for (byte j = 0; j < 3; j++)
+    for (byte k = 0; k < nMarca[j]; k++) {
+      sx += ANG[j]; sy += marca[j][k];
+      sxy += (float)ANG[j] * marca[j][k]; sxx += (float)ANG[j] * ANG[j]; n++;
+    }
   float den = n * sxx - sx * sx;
-  if (fabs(den) < 1e-6) { Serial.println(F("! Meça em ângulos diferentes.")); return; }
+  if (n < 2 || fabs(den) < 1e-6) return;
   usPorGrau = (n * sxy - sx * sy) / den;
   usZero = (sy - usPorGrau * sx) / n;
-  Serial.print(F("Reta: µs = ")); Serial.print(usZero, 1);
-  Serial.print(F(" + ")); Serial.print(usPorGrau, 4); Serial.println(F(" × graus"));
 }
 
-void sumario() {
-  Serial.println(F("--- sumário ---"));
-  Serial.print(F("limites_us;")); Serial.print(limMin); Serial.print(';'); Serial.println(limMax);
-  Serial.print(F("us_zero;us_por_grau;")); Serial.print(usZero, 1); Serial.print(';'); Serial.println(usPorGrau, 4);
-  Serial.println(F("pulso_us;angulo_graus"));
-  for (byte i = 0; i < nPares; i++) {
-    Serial.print(parUs[i]); Serial.print(';'); Serial.println(parGrau[i], 1);
+void tabela() {
+  Serial.println(F("--- marcações (µs) ---"));
+  Serial.println(F("passada;0_grau;90_graus;180_graus"));
+  byte linhas = max(nMarca[0], max(nMarca[1], nMarca[2]));
+  for (byte k = 0; k < linhas; k++) {
+    Serial.print(k + 1);
+    for (byte j = 0; j < 3; j++) {
+      Serial.print(';');
+      if (k < nMarca[j]) Serial.print(marca[j][k]);
+    }
+    Serial.println();
   }
+  if (usPorGrau) {
+    Serial.print(F("Reta: µs = ")); Serial.print(usZero, 1);
+    Serial.print(F(" + ")); Serial.print(usPorGrau, 4); Serial.println(F(" × graus"));
+  }
+  if (limInf || limSup) {
+    Serial.print(F("Limites: ")); Serial.print(limInf);
+    Serial.print(F(" e ")); Serial.print(limSup); Serial.println(F(" µs"));
+  }
+}
+
+void marcarValor(int angulo) {
+  byte j = angulo == 0 ? 0 : angulo == 90 ? 1 : angulo == 180 ? 2 : 3;
+  if (j == 3) { Serial.println(F("! Use V0, V90 ou V180.")); return; }
+  if (nMarca[j] >= MAX_PASSADAS) { Serial.println(F("! Limite de passadas atingido.")); return; }
+  marca[j][nMarca[j]++] = atual;
+  Serial.print(F("Passada ")); Serial.print(nMarca[j]); Serial.print(F(": "));
+  Serial.print(angulo); Serial.print(F("° = ")); Serial.print(atual); Serial.println(F(" µs"));
+  ajustarReta();
+  tabela();
 }
 
 void executar(char* l) {
-  char c = toupper(l[0]);
-  char* arg = l + 1;
-  long a = strtol(arg, &arg, 10), b = strtol(arg, &arg, 10), ms = strtol(arg, NULL, 10);
+  while (*l == ' ') l++;
+  for (char* p = l; *p; p++) *p = toupper(*p);
 
-  switch (c) {
-    case 'I':
-      if (a < TRAVA_MIN || a > TRAVA_MAX || b < TRAVA_MIN || b > TRAVA_MAX || a == b) {
-        Serial.print(F("! O intervalo deve ficar entre ")); Serial.print(TRAVA_MIN);
-        Serial.print(F(" e ")); Serial.print(TRAVA_MAX); Serial.println(F(" µs."));
-        break;
-      }
-      if (ms > 0) tempoMs = ms;
-      inicio = a; fim = b; rodando = false;
-      irSuave(inicio);
-      Serial.print(F("Intervalo de ")); Serial.print(inicio); Serial.print(F(" a "));
-      Serial.print(fim); Serial.print(F(" µs, passo de ")); Serial.print(passo);
-      Serial.print(F(" µs a cada ")); Serial.print(tempoMs); Serial.println(F(" ms. Envie A para avançar."));
-      break;
-    case 'A':
-      if (!inicio) { Serial.println(F("! Defina antes o intervalo: I <início> <fim>")); break; }
-      rodando = true; proximo = millis();
-      break;
-    case 'P':
-      rodando = false;
-      Serial.print(F("Pausado em ")); mostrar(atual);
-      Serial.println(F("A retoma, F finaliza."));
-      break;
-    case 'F': finalizar(F("Finalizado")); break;
-    case 'L': marcarLimite(); break;
-    case 'V': rodando = false; irSuave(a); mostrar(atual); break;
-    case 'D': if (a > 0) passo = a; Serial.print(F("Passo: ")); Serial.print(passo); Serial.println(F(" µs")); break;
-    case 'T': if (a > 0) tempoMs = a; Serial.print(F("Tempo por passo: ")); Serial.print(tempoMs); Serial.println(F(" ms")); break;
-    case 'M':
-      if (nPares < 12) {
-        parUs[nPares] = atual; parGrau[nPares++] = atof(l + 1);
-        Serial.print(F("Medição ")); Serial.print(nPares); Serial.print(F(": "));
-        Serial.print(atual); Serial.print(F(" µs = ")); Serial.print(parGrau[nPares - 1], 1); Serial.println(F("°"));
-      }
-      break;
-    case 'R': ajustarReta(); break;
-    case 'G':
-      if (!usPorGrau) { Serial.println(F("! Calibre antes (M e R).")); break; }
-      rodando = false;
-      irSuave(round(usZero + usPorGrau * atof(l + 1)));
-      mostrar(atual);
-      break;
-    case 'S': sumario(); break;
-    case 'X': rodando = false; servo.detach(); Serial.println(F("Servo solto.")); break;
+  if (l[0] == 'I') {
+    char* arg = l + 1;
+    long a = strtol(arg, &arg, 10), b = strtol(arg, &arg, 10), ms = strtol(arg, NULL, 10);
+    if (a < TRAVA_MIN || a > TRAVA_MAX || b < TRAVA_MIN || b > TRAVA_MAX || a == b) {
+      Serial.print(F("! O intervalo deve ficar entre ")); Serial.print(TRAVA_MIN);
+      Serial.print(F(" e ")); Serial.print(TRAVA_MAX); Serial.println(F(" µs."));
+      return;
+    }
+    if (rodando) { rodando = false; Serial.print(F("Movimento cancelado em ")); mostrar(atual); }
+    if (ms > 0) tempoMs = ms;
+    inicio = a; fim = b;
+    irSuave(inicio);
+    Serial.print(F("Intervalo de ")); Serial.print(inicio); Serial.print(F(" a "));
+    Serial.print(fim); Serial.print(F(" µs, passo de ")); Serial.print(PASSO);
+    Serial.print(F(" µs a cada ")); Serial.print(tempoMs); Serial.println(F(" ms. Envie A para avançar."));
   }
+  else if (!strcmp(l, "A")) {
+    if (!inicio) { Serial.println(F("! Defina antes o intervalo: I <início> <fim> <ms>")); return; }
+    rodando = true; proximo = millis();
+  }
+  else if (!strcmp(l, "P")) {
+    rodando = false;
+    Serial.print(F("Parado em ")); mostrar(atual);
+  }
+  else if (!strcmp(l, "LI")) { limInf = atual; Serial.print(F("Limite inferior: ")); mostrar(atual); }
+  else if (!strcmp(l, "LS")) { limSup = atual; Serial.print(F("Limite superior: ")); mostrar(atual); }
+  else if (l[0] == 'V' && l[1] >= '0' && l[1] <= '9') marcarValor(atoi(l + 1));
+  else { Serial.print(F("! Comando não reconhecido: ")); Serial.println(l); menu(); }
 }
 
 void setup() {
   Serial.begin(9600);
   servo.attach(PINO, TRAVA_MIN, TRAVA_MAX);
   ir(1500);
+  menu();
   Serial.print(F("SG90 no meio do curso: ")); mostrar(atual);
-  Serial.println(F("Defina o intervalo: I <início> <fim> [ms]"));
 }
 
 void loop() {
@@ -157,9 +158,14 @@ void loop() {
   if (n && millis() - ultimo > 80) { l[n] = 0; executar(l); n = 0; }  // sem terminador de linha
 
   if (rodando && (long)(millis() - proximo) >= 0) {
-    if (atual == fim) { finalizar(F("Fim do intervalo")); return; }
+    if (atual == fim) {
+      rodando = false; inicio = fim = 0;
+      Serial.print(F("Fim do intervalo em ")); mostrar(atual);
+      Serial.println(F("Envie I <início> <fim> <ms> para um novo intervalo."));
+      return;
+    }
     int sentido = fim > atual ? 1 : -1;
-    ir(abs(fim - atual) < passo ? fim : atual + sentido * passo);
+    ir(abs(fim - atual) < PASSO ? fim : atual + sentido * PASSO);
     mostrar(atual);
     proximo = millis() + tempoMs;
   }
